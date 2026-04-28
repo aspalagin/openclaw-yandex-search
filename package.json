@@ -1,0 +1,34 @@
+{
+  "name": "openclaw-yandex-search",
+  "version": "0.1.0",
+  "description": "Yandex Search API v2 + Multi-Search provider for OpenClaw",
+  "type": "module",
+  "main": "./index.ts",
+  "scripts": {
+    "build": "tsc --noEmit && echo 'Проверка TypeScript пройдена (jiti загружает TS напрямую)'",
+    "typecheck": "tsc --noEmit",
+    "test:yandex": "node --input-type=module ./scripts/test-yandex.mjs",
+    "test:multi": "node --input-type=module ./scripts/test-multi.mjs"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  },
+  "devDependencies": {
+    "@types/node": "^25.5.0",
+    "tsx": "^4.21.0",
+    "typescript": "^5.9.3"
+  },
+  "dependencies": {
+    "fast-xml-parser": "^4.5.1"
+  },
+  "peerDependencies": {
+    "openclaw": "*"
+  },
+  "peerDependenciesMeta": {
+    "openclaw": {
+      "optional": false
+    }
+  }
+}

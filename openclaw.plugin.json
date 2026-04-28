@@ -1,0 +1,64 @@
+{
+  "id": "openclaw-yandex-search",
+  "name": "Yandex Search + Multi-Search",
+  "description": "Yandex Search API v2 как провайдер веб-поиска и Multi-Search враппер, объединяющий Yandex + Brave с дедупликацией",
+  "version": "0.1.0",
+  "contracts": {
+    "webSearchProviders": ["yandex", "multi"]
+  },
+  "setup": {
+    "providers": [
+      {
+        "id": "yandex",
+        "envVars": ["YC_API_KEY", "YC_FOLDER_ID"]
+      }
+    ]
+  },
+  "uiHints": {
+    "webSearch.apiKey": {
+      "label": "Yandex Cloud API Key",
+      "help": "Yandex Cloud API Key для Search API (fallback: YC_API_KEY env var).",
+      "sensitive": true,
+      "placeholder": "AQVN..."
+    },
+    "webSearch.folderId": {
+      "label": "Yandex Cloud Folder ID",
+      "help": "Folder ID из Yandex Cloud (fallback: YC_FOLDER_ID env var)."
+    }
+  },
+  "configContracts": {
+    "compatibilityRuntimePaths": [
+      "tools.web.search.apiKey"
+    ]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "yandex": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "apiKey": {
+            "type": ["string", "object", "null"]
+          },
+          "folderId": {
+            "type": ["string", "null"]
+          }
+        }
+      },
+      "multi": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "maxResults": {
+            "type": "number",
+            "minimum": 1,
+            "maximum": 50,
+            "default": 10
+          }
+        }
+      }
+    }
+  }
+}
