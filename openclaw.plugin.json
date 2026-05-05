@@ -4,13 +4,19 @@
   "description": "Yandex Search API v2 как провайдер веб-поиска и Multi-Search враппер, объединяющий Yandex + Brave с дедупликацией",
   "version": "0.1.0",
   "contracts": {
-    "webSearchProviders": ["yandex", "multi"]
+    "webSearchProviders": [
+      "yandex",
+      "multi"
+    ]
   },
   "setup": {
     "providers": [
       {
         "id": "yandex",
-        "envVars": ["YC_API_KEY", "YC_FOLDER_ID"]
+        "envVars": [
+          "YC_API_KEY",
+          "YC_FOLDER_ID"
+        ]
       }
     ]
   },
@@ -40,10 +46,17 @@
         "additionalProperties": false,
         "properties": {
           "apiKey": {
-            "type": ["string", "object", "null"]
+            "type": [
+              "string",
+              "object",
+              "null"
+            ]
           },
           "folderId": {
-            "type": ["string", "null"]
+            "type": [
+              "string",
+              "null"
+            ]
           }
         }
       },
@@ -60,5 +73,8 @@
         }
       }
     }
+  },
+  "activation": {
+    "onStartup": true
   }
 }
