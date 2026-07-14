@@ -4,4 +4,3 @@ dist/
 !scripts/*.mjs
 .env
 .env.*
-package-lock.json

@@ -1,0 +1,17 @@
+name: Предложение улучшения
+description: Предложите конкретное улучшение.
+title: "Идея: "
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Задача
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Предлагаемое решение
+    validations:
+      required: true

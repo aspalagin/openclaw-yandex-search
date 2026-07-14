@@ -49,7 +49,7 @@ function normalizeUrlForDedup(rawUrl: string): string {
     // убираем мусорные query-параметры
     const filteredParams = new URLSearchParams();
     for (const [k, v] of url.searchParams) {
-      if (!/^(utm_|fbclid|gclid|yclid|mc_[a-z]|igshid|ref|mc_eid)$/i.test(k)) {
+      if (!/^(utm_.*|fbclid|gclid|yclid|mc_[a-z]|igshid|ref|mc_eid)$/i.test(k)) {
         filteredParams.set(k, v);
       }
     }

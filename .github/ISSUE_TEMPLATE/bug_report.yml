@@ -1,0 +1,23 @@
+name: Сообщение об ошибке
+description: Сообщите о воспроизводимой ошибке без ключей и конфиденциальных запросов.
+title: "Ошибка: "
+labels: ["bug"]
+body:
+  - type: textarea
+    id: description
+    attributes:
+      label: Описание
+      description: Что произошло и чего вы ожидали?
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Шаги воспроизведения
+      description: Удалите ключи и конфиденциальные поисковые запросы.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Версия или коммит

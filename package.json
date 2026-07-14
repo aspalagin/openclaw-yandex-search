@@ -2,11 +2,22 @@
   "name": "openclaw-yandex-search",
   "version": "0.1.0",
   "description": "Yandex Search API v2 + Multi-Search provider for OpenClaw",
+  "private": true,
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/aspalagin/openclaw-yandex-search.git"
+  },
+  "homepage": "https://github.com/aspalagin/openclaw-yandex-search#readme",
+  "bugs": {
+    "url": "https://github.com/aspalagin/openclaw-yandex-search/issues"
+  },
   "type": "module",
   "main": "./dist/index.js",
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc --noEmit",
+    "test": "node --import tsx --test test/**/*.test.ts",
     "test:yandex": "node --input-type=module ./scripts/test-yandex.mjs",
     "test:multi": "node --input-type=module ./scripts/test-multi.mjs"
   },
@@ -21,7 +32,7 @@
     "typescript": "^5.9.3"
   },
   "dependencies": {
-    "fast-xml-parser": "^4.5.1"
+    "fast-xml-parser": "^5.10.0"
   },
   "peerDependencies": {
     "openclaw": "*"

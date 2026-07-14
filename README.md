@@ -15,9 +15,9 @@ openclaw-yandex-search/
 │   ├── yandex.ts          # YandexSearchProvider + фабрика плагина
 │   └── multi.ts          # MultiSearchProvider + фабрика плагина
 ├── scripts/
-│   ├── test-yandex.mjs   # Тест YandexSearchProvider
-│   └── test-multi.mjs    # Тест MultiSearchProvider
-└── node_modules/
+│   ├── test-yandex.mjs   # Ручной тест YandexSearchProvider
+│   └── test-multi.mjs    # Ручной тест MultiSearchProvider
+└── test/                 # Unit-тесты с моками
 ```
 
 ## Провайдеры
@@ -35,15 +35,25 @@ openclaw-yandex-search/
 - Сортировка: сначала `both` (найдены обоими), затем чередование yandex/brave
 - Graceful degradation: если один провайдер упал — возвращаются результаты второго
 
-## Установка
+## Установка и поставка
+
+Пакет не опубликован в npm (это проверяется перед релизом). Поддерживаемая
+модель поставки — клон репозитория как локального расширения OpenClaw:
 
 ```bash
+git clone https://github.com/aspalagin/openclaw-yandex-search.git \
+  ~/.openclaw/extensions/openclaw-yandex-search
 cd ~/.openclaw/extensions/openclaw-yandex-search
-npm install
+npm ci --omit=peer
+npm run build
 
-# Добавить симлинк на openclaw (если ещё нет)
+# Сделать runtime OpenClaw доступным как peer dependency после установки
 ln -sf /usr/lib/node_modules/openclaw node_modules/openclaw
 ```
+
+После обновления клона повторите `npm ci --omit=peer` и `npm run build`. Каталог `dist/`
+создаётся локально и не хранится в репозитории. npm-публикация намеренно
+заблокирована полем `private` в `package.json`.
 
 ## Регистрация в openclaw.json
 
@@ -97,9 +107,15 @@ ln -sf /usr/lib/node_modules/openclaw node_modules/openclaw
 ## Тесты
 
 ```bash
-# Тест Yandex-провайдера
-node ./scripts/test-yandex.mjs
+# Unit-тесты без внешних ключей и сети
+npm test
 
-# Тест Multi-Search
-node ./scripts/test-multi.mjs
+# TypeScript-проверка и сборка
+npm run typecheck
+npm run build
 ```
+
+Скрипты `test:yandex` и `test:multi` оставлены для ручной проверки реального
+API: им требуются соответствующие ключи окружения. Правила вклада — в
+[CONTRIBUTING.md](CONTRIBUTING.md), политика безопасности — в
+[SECURITY.md](SECURITY.md), история изменений — в [CHANGELOG.md](CHANGELOG.md).
