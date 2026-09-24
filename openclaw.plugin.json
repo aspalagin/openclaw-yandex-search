@@ -2,7 +2,7 @@
   "id": "openclaw-yandex-search",
   "name": "Yandex Search + Multi-Search",
   "description": "Yandex Search API v2 как провайдер веб-поиска и Multi-Search: Yandex + Brave параллельно, с дедупликацией и учётом ошибок движков",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "contracts": {
     "webSearchProviders": [
       "yandex",

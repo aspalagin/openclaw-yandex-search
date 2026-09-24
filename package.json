@@ -1,6 +1,6 @@
 {
   "name": "openclaw-yandex-search",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Yandex Search API v2 + Multi-Search (Yandex + Brave) web search providers for OpenClaw",
   "private": true,
   "license": "MIT",
