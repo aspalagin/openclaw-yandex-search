@@ -149,9 +149,17 @@ export interface BraveEngineOptions {
 
 /** Один запрос к Brave с одной повторной попыткой после HTTP 429. Бросает EngineError при сбое. */
 export async function searchBrave(params: EngineSearchParams, options: BraveEngineOptions): Promise<SearchRow[]> {
+  const timeout = withTimeout(params.timeoutMs, params.signal);
+  try {
+    return await runBraveSearch(params, options, timeout.signal);
+  } finally {
+    timeout.clear();
+  }
+}
+
+async function runBraveSearch(params: EngineSearchParams, options: BraveEngineOptions, signal: AbortSignal): Promise<SearchRow[]> {
   const fetchImpl = options.fetchImpl ?? fetch;
   const logger = options.logger ?? silentLogger;
-  const signal = withTimeout(params.timeoutMs, params.signal);
   const failure = (err: unknown) => toEngineError("brave", err, { externalSignal: params.signal, timeoutMs: params.timeoutMs });
   const url = buildBraveSearchUrl(params, options.today).toString();
   const headers = { Accept: "application/json", "X-Subscription-Token": options.apiKey };

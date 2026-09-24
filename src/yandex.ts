@@ -388,9 +388,17 @@ function describeOperationError(error: unknown): string {
  * внешняя отмена пробрасывается как AbortError.
  */
 export async function searchYandex(params: EngineSearchParams, options: YandexEngineOptions): Promise<SearchRow[]> {
+  const timeout = withTimeout(params.timeoutMs, params.signal);
+  try {
+    return await runYandexSearch(params, options, timeout.signal);
+  } finally {
+    timeout.clear();
+  }
+}
+
+async function runYandexSearch(params: EngineSearchParams, options: YandexEngineOptions, signal: AbortSignal): Promise<SearchRow[]> {
   const fetchImpl = options.fetchImpl ?? fetch;
   const logger = options.logger ?? silentLogger;
-  const signal = withTimeout(params.timeoutMs, params.signal);
   const failure = (err: unknown) => toEngineError("yandex", err, { externalSignal: params.signal, timeoutMs: params.timeoutMs });
   const searchType = resolveYandexSearchType(params.country);
   const body = buildYandexRequestBody({

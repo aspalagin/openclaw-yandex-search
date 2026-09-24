@@ -141,10 +141,36 @@ export function sleep(ms: number, signal?: AbortSignal): Promise<void> {
   });
 }
 
-/** Сигнал, который срабатывает по внешней отмене или по таймауту. */
-export function withTimeout(timeoutMs: number, signal?: AbortSignal): AbortSignal {
-  const timeout = AbortSignal.timeout(Math.max(1, Math.floor(timeoutMs)));
-  return signal ? AbortSignal.any([signal, timeout]) : timeout;
+export interface TimeoutSignal {
+  signal: AbortSignal;
+  /** Снимает таймер и подписку на внешний сигнал; вызывать по завершении запроса. */
+  clear: () => void;
+}
+
+/**
+ * Сигнал, который срабатывает по внешней отмене или по таймауту.
+ * Свой таймер, а не AbortSignal.timeout: тот unref'нут и в процессе без других задач
+ * (тесты с поддельным fetch) может вообще не сработать до завершения цикла событий.
+ */
+export function withTimeout(timeoutMs: number, signal?: AbortSignal): TimeoutSignal {
+  const controller = new AbortController();
+  const timer = setTimeout(
+    () => controller.abort(new DOMException(`Таймаут ${timeoutMs} мс`, "TimeoutError")),
+    Math.max(1, Math.floor(timeoutMs)),
+  );
+  const onAbort = () => controller.abort(abortReason(signal));
+  if (signal?.aborted) {
+    onAbort();
+  } else {
+    signal?.addEventListener("abort", onAbort, { once: true });
+  }
+  return {
+    signal: controller.signal,
+    clear: () => {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
+    },
+  };
 }
 
 export function isTimeoutError(err: unknown): boolean {
