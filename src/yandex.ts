@@ -1,130 +1,318 @@
 /**
- * Yandex Search API v2 Provider
+ * Yandex Search API v2, отложенный режим.
  *
- * Реализует контракт WebSearchProviderPlugin.
- * API endpoint: https://searchapi.api.cloud.yandex.net/v2/web/searchAsync
- * Авторизация: заголовок Authorization: Api-Key <YC_API_KEY>
+ * POST https://searchapi.api.cloud.yandex.net/v2/web/searchAsync  → id операции,
+ * затем GET https://operation.api.cloud.yandex.net/operations/{id} до done=true.
+ * Результат — base64-XML (<yandexsearch>) в response.rawData.
  *
- * API асинхронный: сначала POST (возвращает id операции), затем polling
- * operation.api.cloud.yandex.net/operations/{id} до done=true.
- * Итоговый результат — base64-encoded XML в поле rawData.
- *
- * Корневой XML-элемент: <yandexsearch>
+ * Синхронный режим (/v2/web/search) намеренно не используется: по тарифу Yandex Search API
+ * синхронный запрос примерно в 16 раз дороже отложенного (пример расчёта в документации:
+ * 250 000 синхронных = 122 000 ₽, 50 000 отложенных = 1 525 ₽).
  */
 
 import { XMLParser } from "fast-xml-parser";
-import type {
-  YandexSearchOptions,
-  YandexSearchResponse,
-  YandexSearchResult,
-} from "./types.js";
+import type { EngineSearchParams, FetchLike, PluginLogger, SearchRow } from "./types.js";
+import {
+  EngineError,
+  errorMessage,
+  hostnameOf,
+  isHttpUrl,
+  readResponseText,
+  silentLogger,
+  sleep,
+  stripMarkup,
+  toEngineError,
+  toIsoDate,
+  truncate,
+  withTimeout,
+} from "./util.js";
 
-/** Нормализует дату в формат YYYYMMDD для Yandex */
-function normalizeDate(dateStr?: string): string | undefined {
-  if (!dateStr) return undefined;
-  if (/^\d{8}$/.test(dateStr)) return dateStr;
-  try {
-    const d = new Date(dateStr);
-    return d.getFullYear().toString() + String(d.getMonth() + 1).padStart(2, "0") + String(d.getDate()).padStart(2, "0");
-  } catch {
+export const YANDEX_SEARCH_ASYNC_URL = "https://searchapi.api.cloud.yandex.net/v2/web/searchAsync";
+export const YANDEX_OPERATIONS_URL = "https://operation.api.cloud.yandex.net/operations/";
+/** Первый опрос операции: по замерам Яндекс обычно готов уже через доли секунды. */
+export const YANDEX_POLL_INITIAL_DELAY_MS = 300;
+export const YANDEX_POLL_INTERVAL_MS = 500;
+/** Ограничение API на длину queryText. */
+export const YANDEX_MAX_QUERY_LENGTH = 400;
+/** Код «Искомая комбинация слов нигде не встречается»: это пустая выдача, а не сбой. */
+export const YANDEX_NO_RESULTS_ERROR_CODE = "15";
+const MOSCOW_REGION_ID = "213";
+
+export type YandexSearchType =
+  | "SEARCH_TYPE_RU"
+  | "SEARCH_TYPE_TR"
+  | "SEARCH_TYPE_COM"
+  | "SEARCH_TYPE_KK"
+  | "SEARCH_TYPE_BE"
+  | "SEARCH_TYPE_UZ";
+
+export type YandexLocalization =
+  | "LOCALIZATION_RU"
+  | "LOCALIZATION_UK"
+  | "LOCALIZATION_BE"
+  | "LOCALIZATION_KK"
+  | "LOCALIZATION_TR"
+  | "LOCALIZATION_EN";
+
+/** Периоды, которые поддерживает поле `period` Search API v2. */
+export type YandexPeriod = "PERIOD_DAY" | "PERIOD_2_WEEKS" | "PERIOD_MONTH";
+
+const COUNTRY_TO_SEARCH_TYPE: Record<string, YandexSearchType> = {
+  RU: "SEARCH_TYPE_RU",
+  TR: "SEARCH_TYPE_TR",
+  KZ: "SEARCH_TYPE_KK",
+  BY: "SEARCH_TYPE_BE",
+  UZ: "SEARCH_TYPE_UZ",
+};
+
+const LANGUAGE_TO_LOCALIZATION: Record<string, YandexLocalization> = {
+  ru: "LOCALIZATION_RU",
+  uk: "LOCALIZATION_UK",
+  be: "LOCALIZATION_BE",
+  kk: "LOCALIZATION_KK",
+  tr: "LOCALIZATION_TR",
+  en: "LOCALIZATION_EN",
+};
+
+const SEARCH_TYPE_DEFAULT_LOCALIZATION: Record<YandexSearchType, YandexLocalization> = {
+  SEARCH_TYPE_RU: "LOCALIZATION_RU",
+  SEARCH_TYPE_TR: "LOCALIZATION_TR",
+  SEARCH_TYPE_COM: "LOCALIZATION_EN",
+  SEARCH_TYPE_KK: "LOCALIZATION_KK",
+  SEARCH_TYPE_BE: "LOCALIZATION_BE",
+  SEARCH_TYPE_UZ: "LOCALIZATION_RU",
+};
+
+/** Страна → домен поиска. RU/TR/KZ/BY/UZ имеют свои домены, остальные (и ALL) идут на yandex.com. */
+export function resolveYandexSearchType(country?: string): YandexSearchType {
+  const code = country?.trim().toUpperCase();
+  if (!code) {
+    return "SEARCH_TYPE_RU";
+  }
+  return COUNTRY_TO_SEARCH_TYPE[code] ?? "SEARCH_TYPE_COM";
+}
+
+export function resolveYandexLocalization(language: string | undefined, searchType: YandexSearchType): YandexLocalization {
+  const code = language?.trim().toLowerCase().split(/[-_]/)[0];
+  return (code && LANGUAGE_TO_LOCALIZATION[code]) || SEARCH_TYPE_DEFAULT_LOCALIZATION[searchType];
+}
+
+export interface YandexPeriodDecision {
+  period?: YandexPeriod;
+  /** exact — фильтр совпадает с запросом; superset — шире запроса; none — выразить нельзя. */
+  coverage: "exact" | "superset" | "none";
+  note?: string;
+}
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Яндекс фильтрует по дате только грубыми периодами (сутки, 2 недели, месяц).
+ * Подбирает ближайший период, накрывающий запрошенный диапазон.
+ */
+export function resolveYandexPeriod(filters: {
+  freshness?: string;
+  dateAfter?: string;
+  dateBefore?: string;
+  now?: Date;
+}): YandexPeriodDecision {
+  const now = filters.now ?? new Date();
+  if (filters.freshness) {
+    switch (filters.freshness) {
+      case "pd":
+        return { period: "PERIOD_DAY", coverage: "exact" };
+      case "pw":
+        return { period: "PERIOD_2_WEEKS", coverage: "superset", note: "неделя расширена до 2 недель" };
+      case "pm":
+        return { period: "PERIOD_MONTH", coverage: "exact" };
+      default:
+        return { coverage: "none", note: `свежесть «${filters.freshness}» шире месяца` };
+    }
+  }
+  if (!filters.dateAfter && !filters.dateBefore) {
+    return { coverage: "exact" };
+  }
+  const today = now.toISOString().slice(0, 10);
+  if (filters.dateBefore && filters.dateBefore < today) {
+    return { coverage: "none", note: "верхняя граница даты в прошлом" };
+  }
+  if (!filters.dateAfter) {
+    return { coverage: "exact" };
+  }
+  const after = Date.parse(`${filters.dateAfter}T00:00:00Z`);
+  if (!Number.isFinite(after)) {
+    return { coverage: "none", note: "нижняя граница даты не распознана" };
+  }
+  const days = (now.getTime() - after) / DAY_MS;
+  if (days <= 1) {
+    return { period: "PERIOD_DAY", coverage: "superset" };
+  }
+  if (days <= 14) {
+    return { period: "PERIOD_2_WEEKS", coverage: "superset" };
+  }
+  if (days <= 31) {
+    return { period: "PERIOD_MONTH", coverage: "superset" };
+  }
+  return { coverage: "none", note: "нижняя граница даты старше месяца" };
+}
+
+export interface YandexRequestOptions {
+  query: string;
+  count: number;
+  folderId: string;
+  searchType: YandexSearchType;
+  localization: YandexLocalization;
+  period?: YandexPeriod;
+}
+
+/** Тело запроса WebSearch.SearchAsync (поля по справочнику API v2). */
+export function buildYandexRequestBody(options: YandexRequestOptions): Record<string, unknown> {
+  const queryText = options.query.trim().slice(0, YANDEX_MAX_QUERY_LENGTH);
+  const body: Record<string, unknown> = {
+    query: {
+      searchType: options.searchType,
+      queryText,
+      familyMode: "FAMILY_MODE_NONE",
+      page: 0,
+    },
+    sortSpec: {
+      sortMode: "SORT_MODE_BY_RELEVANCE",
+      sortOrder: "SORT_ORDER_DESC",
+    },
+    groupSpec: {
+      groupMode: "GROUP_MODE_DEEP",
+      groupsOnPage: Math.min(100, Math.max(1, Math.floor(options.count))),
+      docsInGroup: 1,
+    },
+    maxPassages: 2,
+    l10n: options.localization,
+    folderId: options.folderId,
+    responseFormat: "FORMAT_XML",
+  };
+  if (options.searchType === "SEARCH_TYPE_RU") {
+    body.region = MOSCOW_REGION_ID;
+  }
+  if (options.period) {
+    body.period = options.period;
+  }
+  return body;
+}
+
+// =============================================================================
+// Разбор XML
+// =============================================================================
+
+interface ParsedTextNode {
+  "#text"?: unknown;
+}
+
+interface ParsedDoc {
+  "@_url"?: unknown;
+  url?: unknown;
+  domain?: unknown;
+  title?: unknown;
+  headline?: unknown;
+  passages?: { passage?: unknown };
+  modtime?: unknown;
+}
+
+interface ParsedGroup {
+  doc?: ParsedDoc | ParsedDoc[];
+}
+
+interface ParsedGrouping {
+  group?: ParsedGroup | ParsedGroup[];
+}
+
+interface ParsedResponse {
+  error?: unknown;
+  results?: { grouping?: ParsedGrouping | ParsedGrouping[] };
+  grouping?: ParsedGrouping;
+}
+
+interface ParsedXml {
+  yandexsearch?: { response?: ParsedResponse };
+}
+
+export interface YandexParseResult {
+  rows: SearchRow[];
+  error?: { code?: string; message: string };
+}
+
+function toArray<T>(value: T | T[] | undefined): T[] {
+  if (value === undefined || value === null) {
+    return [];
+  }
+  return Array.isArray(value) ? value : [value];
+}
+
+/** Текст узла: stopNodes отдают сырую строку с <hlword>, иначе объект с #text. */
+function textOf(raw: unknown): string {
+  if (raw === null || raw === undefined) {
+    return "";
+  }
+  if (typeof raw === "string" || typeof raw === "number") {
+    return stripMarkup(raw);
+  }
+  if (Array.isArray(raw)) {
+    return raw.map(textOf).filter(Boolean).join(" ").trim();
+  }
+  if (typeof raw === "object") {
+    return stripMarkup((raw as ParsedTextNode)["#text"]);
+  }
+  return "";
+}
+
+function passagesOf(raw: ParsedDoc["passages"]): string {
+  const passage = raw?.passage;
+  if (Array.isArray(passage)) {
+    return passage.map(textOf).filter(Boolean).join(" … ");
+  }
+  return textOf(passage);
+}
+
+function errorOf(response: ParsedResponse): YandexParseResult["error"] {
+  const raw = response.error;
+  if (raw === undefined || raw === null) {
     return undefined;
   }
-}
-
-// =============================================================================
-// Типы для распарсенного XML
-// =============================================================================
-
-interface YandexTitleObj {
-  hlword?: string[];
-  "#text"?: string;
-}
-
-interface YandexPassageObj {
-  hlword?: string[];
-  "#text"?: string;
-}
-
-interface YandexParsedDoc {
-  "@_id"?: string;
-  "@_url"?: string;
-  url?: string;        // бывает и строкой
-  domain?: string;
-  title?: string | YandexTitleObj | YandexTitleObj[];
-  passages?: {
-    passage?: string | YandexPassageObj | YandexPassageObj[];
-  };
-  modtime?: string;   // "YYYYMMDDTHHmmss"
-  "mime-type"?: string;
-}
-
-interface YandexParsedGroup {
-  categ?: { "#text"?: string; "@_name"?: string };
-  doc?: YandexParsedDoc | YandexParsedDoc[];
-  doccount?: string;
-  relevance?: unknown;
-}
-
-interface YandexParsedResponse {
-  reqid?: string;
-  found?: unknown;
-  "found-docs"?: unknown;
-  results?: {
-    grouping?: YandexParsedGrouping | YandexParsedGrouping[];
-  };
-  grouping?: YandexParsedGrouping;
-}
-
-interface YandexParsedGrouping {
-  page?: { "#text": number; "@_first"?: number; "@_last"?: number };
-  group?: YandexParsedGroup | YandexParsedGroup[];
-  "@_groups-on-page"?: number;
-  "@_docs-in-group"?: number;
-}
-
-interface YandexParsedXml {
-  "?xml"?: unknown;
-  yandexsearch?: {
-    request?: unknown;
-    response?: YandexParsedResponse;
-  };
-}
-
-// =============================================================================
-// Парсинг XML
-// =============================================================================
-
-/** Убирает XML-теги (hlword и пр.) из строки, возвращает чистый текст */
-function stripXmlTags(s: unknown): string {
-  if (!s) return "";
-  return String(s).replace(/<[^>]+>/g, "").replace(/&quot;/g, '"').replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/\s+/g, " ").trim();
-}
-
-/** Извлекает чистый текст из поля title (stopNodes возвращает raw XML строку) */
-function extractTitle(raw: YandexParsedDoc["title"]): string {
-  if (!raw) return "";
-  if (typeof raw === "string") return stripXmlTags(raw);
-  if (Array.isArray(raw)) return raw.map(extractTitle).join(" ").trim();
-  // Объект { hlword: [...], "#text": "..." } — фоллбэк если stopNodes не сработал
-  const text = raw["#text"] ?? "";
-  return stripXmlTags(text);
-}
-
-/** Извлекает сниппет из passages (stopNodes возвращает raw XML строку) */
-function extractPassage(raw: YandexParsedDoc["passages"]): string {
-  if (!raw) return "";
-  const passage = raw.passage;
-  if (!passage) return "";
-  if (typeof passage === "string") return stripXmlTags(passage);
-  if (Array.isArray(passage)) {
-    return passage.map(p => stripXmlTags(typeof p === "string" ? p : (p["#text"] ?? ""))).join(" ... ").trim();
+  if (typeof raw === "string" || typeof raw === "number") {
+    return { message: stripMarkup(raw) || "неизвестная ошибка" };
   }
-  // Объект — фоллбэк
-  return stripXmlTags(passage["#text"] ?? "");
+  if (typeof raw === "object") {
+    const node = raw as Record<string, unknown>;
+    const code = node["@_code"];
+    return {
+      code: code === undefined || code === null ? undefined : String(code),
+      message: stripMarkup(node["#text"]) || "неизвестная ошибка",
+    };
+  }
+  return { message: String(raw) };
 }
 
-/** Парсит XML-ответ Yandex Search API v2 */
-function parseYandexXmlResponse(xml: string): YandexSearchResult[] {
+function docToRow(doc: ParsedDoc): SearchRow | undefined {
+  const rawUrl = typeof doc["@_url"] === "string" ? doc["@_url"] : typeof doc.url === "string" ? doc.url : "";
+  const url = rawUrl.trim();
+  if (!isHttpUrl(url)) {
+    return undefined;
+  }
+  const title = textOf(doc.title) || hostnameOf(url) || url;
+  const snippet = passagesOf(doc.passages) || textOf(doc.headline);
+  const row: SearchRow = { title, url, snippet };
+  const published = toIsoDate(doc.modtime);
+  if (published) {
+    row.published = published;
+  }
+  const domain = typeof doc.domain === "string" ? doc.domain.trim() : "";
+  const siteName = domain || hostnameOf(url);
+  if (siteName) {
+    row.siteName = siteName;
+  }
+  return row;
+}
+
+/** Разбирает XML-ответ Search API v2 в строки формата ядра. */
+export function parseYandexXml(xml: string): YandexParseResult {
   const parser = new XMLParser({
     ignoreAttributes: false,
     attributeNamePrefix: "@_",
@@ -135,217 +323,162 @@ function parseYandexXmlResponse(xml: string): YandexSearchResult[] {
     stopNodes: ["*.title", "*.passage"],
   });
 
-  let parsed: YandexParsedXml;
+  let parsed: ParsedXml;
   try {
-    parsed = parser.parse(xml) as YandexParsedXml;
+    parsed = parser.parse(xml) as ParsedXml;
   } catch (err) {
-    console.error("[YandexSearchProvider] Ошибка парсинга XML:", err);
-    return [];
+    return { rows: [], error: { message: `XML не разобран: ${errorMessage(err)}` } };
   }
 
-  const resp = parsed?.yandexsearch?.response;
-  if (!resp) {
-    console.error("[YandexSearchProvider] Некорректный формат ответа: нет yandexsearch.response");
-    return [];
+  const response = parsed?.yandexsearch?.response;
+  if (!response) {
+    return { rows: [], error: { message: "в ответе нет yandexsearch.response" } };
+  }
+  const error = errorOf(response);
+  if (error) {
+    return { rows: [], error };
   }
 
-  // XML: response > results > grouping (может быть массив из одного элемента)
-  const rawGrouping = resp.results?.grouping ?? resp.grouping;
+  const rawGrouping = response.results?.grouping ?? response.grouping;
   const grouping = Array.isArray(rawGrouping) ? rawGrouping[0] : rawGrouping;
-  if (!grouping) {
-    return [];
-  }
-
-  const results: YandexSearchResult[] = [];
-  const groups = grouping.group ? (Array.isArray(grouping.group) ? grouping.group : [grouping.group]) : [];
-
-  for (const group of groups) {
-    const docs = group.doc ? (Array.isArray(group.doc) ? group.doc : [group.doc]) : [];
-
-    for (const doc of docs) {
-      // URL: бывает @_url или plain url (string)
-      const url = doc["@_url"] ?? (typeof doc.url === "string" ? doc.url : "") as string;
-      if (!url) continue;
-
-      const title = extractTitle(doc.title);
-      const description = extractPassage(doc.passages);
-      const date = doc.modtime ? String(doc.modtime).trim() : undefined;
-      const type = doc["mime-type"];
-
-      results.push({ title, url, description, date, type });
+  const rows: SearchRow[] = [];
+  for (const group of toArray(grouping?.group)) {
+    for (const doc of toArray(group.doc)) {
+      const row = docToRow(doc);
+      if (row) {
+        rows.push(row);
+      }
     }
   }
-
-  return results;
+  return { rows };
 }
 
 // =============================================================================
-// Класс YandexSearchProvider
+// Вызов API
 // =============================================================================
 
-export class YandexSearchProvider {
-  private readonly apiKey: string;
-  private readonly folderId: string;
-  private readonly searchUrl = "https://searchapi.api.cloud.yandex.net/v2/web/searchAsync";
-  private readonly pollUrlBase = "https://operation.api.cloud.yandex.net/operations/";
-
-  constructor(apiKey: string, folderId: string) {
-    this.apiKey = apiKey;
-    this.folderId = folderId;
-  }
-
-  async search(query: string, options: YandexSearchOptions = {}): Promise<YandexSearchResponse> {
-    const { count = 10, language } = options;
-
-    const body = JSON.stringify({
-      query: {
-        searchType: "SEARCH_TYPE_RU",
-        queryText: query,
-        familyMode: "FAMILY_MODE_NONE",
-        page: 0,
-      },
-      sortSpec: {
-        sortMode: "SORT_MODE_BY_RELEVANCE",
-        sortOrder: "SORT_ORDER_DESC",
-      },
-      groupSpec: {
-        groupMode: "GROUP_MODE_DEEP",
-        groupsOnPage: count,
-        docsInGroup: 1,
-      },
-      maxPassages: 2,
-      region: "213",
-      l10N: language === "en" ? "LOCALIZATION_EN" : "LOCALIZATION_RU",
-      folderId: this.folderId,
-    });
-
-    const authHeaders = { "Authorization": "Api-Key " + this.apiKey };
-
-    let opId: string | undefined;
-    try {
-      const response = await fetch(this.searchUrl, {
-        method: "POST",
-        headers: { ...authHeaders, "Content-Type": "application/json" },
-        body,
-      });
-
-      if (!response.ok) {
-        const errorText = await response.text().catch(() => "");
-        const errorMsg = "Yandex API HTTP " + response.status + ": " + errorText;
-        console.error("[YandexSearchProvider] " + errorMsg);
-        return { results: [], error: errorMsg };
-      }
-
-      const opData = await response.json() as { id?: string; error?: string };
-      if (!opData.id) {
-        const errorMsg = "Нет id операции: " + JSON.stringify(opData);
-        console.error("[YandexSearchProvider] " + errorMsg);
-        return { results: [], error: errorMsg };
-      }
-      opId = opData.id;
-
-    } catch (err) {
-      const errorMsg = err instanceof Error ? err.message : String(err);
-      console.error("[YandexSearchProvider] Ошибка запуска поиска: " + errorMsg);
-      return { results: [], error: errorMsg };
-    }
-
-    const pollUrl = this.pollUrlBase + opId;
-    const deadline = Date.now() + 30_000;
-
-    while (Date.now() < deadline) {
-      await new Promise(resolve => setTimeout(resolve, 1_000));
-
-      try {
-        const pollResp = await fetch(pollUrl, { headers: authHeaders });
-
-        if (!pollResp.ok) {
-          console.warn("[YandexSearchProvider] Polling HTTP " + pollResp.status + ", ждём...");
-          continue;
-        }
-
-        const pollResult = await pollResp.json() as {
-          done?: boolean;
-          response?: { rawData?: string };
-        };
-
-        if (pollResult.done) {
-          const rawData = pollResult.response?.rawData;
-          if (!rawData) {
-            return { results: [], error: "Операция завершена, но rawData пуста" };
-          }
-          const xmlBytes = Buffer.from(rawData, "base64");
-          const xml = xmlBytes.toString("utf-8");
-          const results = parseYandexXmlResponse(xml);
-          return { results, total: results.length };
-        }
-
-      } catch (err) {
-        console.warn("[YandexSearchProvider] Polling ошибка: " + err);
-      }
-    }
-
-    return { results: [], error: "Таймаут: операция не завершилась за 30 секунд" };
-  }
-}
-
-
-// =============================================================================
-// Фабрика для регистрации в OpenClaw (контракт WebSearchProviderPlugin)
-// =============================================================================
-
-export function createYandexSearchProviderPlugin(params: {
+export interface YandexEngineOptions {
   apiKey: string;
   folderId: string;
-}) {
-  const { apiKey, folderId } = params;
+  fetchImpl?: FetchLike;
+  logger?: PluginLogger;
+  pollInitialDelayMs?: number;
+  pollIntervalMs?: number;
+  period?: YandexPeriod;
+}
 
-  const provider = new YandexSearchProvider(apiKey, folderId);
+interface OperationPayload {
+  id?: unknown;
+  done?: unknown;
+  error?: unknown;
+  response?: { rawData?: unknown };
+}
 
-  const credentialPath = "plugins.entries.yandex.config.webSearch.apiKey";
+function describeOperationError(error: unknown): string {
+  if (typeof error === "object" && error !== null) {
+    const node = error as Record<string, unknown>;
+    const message = typeof node.message === "string" ? node.message : JSON.stringify(error);
+    return node.code === undefined ? message : `${message} (код ${String(node.code)})`;
+  }
+  return String(error);
+}
 
-  return {
-    id: "yandex",
-    label: "Yandex Search",
-    hint: "Поиск через Yandex Search API v2 · российские и мировые результаты",
-    onboardingScopes: ["text-inference"] as const,
-    requiresCredential: true,
-    credentialLabel: "Yandex Cloud API Key",
-    envVars: ["YC_API_KEY"],
-    placeholder: "AQVN...",
-    signupUrl: "https://cloud.yandex.ru/docs/search-api/",
-    docsUrl: "https://cloud.yandex.ru/docs/search-api/concepts/overview",
-    autoDetectOrder: 5,
-    credentialPath,
-    inactiveSecretPaths: [credentialPath],
+/**
+ * Выполняет поиск в отложенном режиме. Бросает EngineError при любом сбое;
+ * внешняя отмена пробрасывается как AbortError.
+ */
+export async function searchYandex(params: EngineSearchParams, options: YandexEngineOptions): Promise<SearchRow[]> {
+  const fetchImpl = options.fetchImpl ?? fetch;
+  const logger = options.logger ?? silentLogger;
+  const signal = withTimeout(params.timeoutMs, params.signal);
+  const failure = (err: unknown) => toEngineError("yandex", err, { externalSignal: params.signal, timeoutMs: params.timeoutMs });
+  const searchType = resolveYandexSearchType(params.country);
+  const body = buildYandexRequestBody({
+    query: params.query,
+    count: params.count,
+    folderId: options.folderId,
+    searchType,
+    localization: resolveYandexLocalization(params.language, searchType),
+    period: options.period,
+  });
+  const authHeader = { Authorization: `Api-Key ${options.apiKey}` };
 
-    getCredentialValue: (_searchConfig?: Record<string, unknown>) => apiKey,
-    setCredentialValue: (_target: Record<string, unknown>, _value: unknown) => { /* read-only */ },
+  let operationId: string;
+  try {
+    const response = await fetchImpl(YANDEX_SEARCH_ASYNC_URL, {
+      method: "POST",
+      headers: { ...authHeader, "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+      signal,
+    });
+    if (!response.ok) {
+      throw new EngineError("yandex", `HTTP ${response.status} при запуске поиска: ${await readResponseText(response)}`, {
+        status: response.status,
+      });
+    }
+    const payload = (await response.json()) as OperationPayload;
+    if (typeof payload.id !== "string" || !payload.id) {
+      throw new EngineError("yandex", `ответ без id операции: ${truncate(JSON.stringify(payload), 300)}`);
+    }
+    operationId = payload.id;
+  } catch (err) {
+    throw failure(err);
+  }
 
-    createTool: (_ctx) => ({
-      description: "Выполняет веб-поиск через Yandex Search API v2. Возвращает структурированный список результатов с заголовками, URL и сниппетами.",
-      parameters: {
-        type: "object",
-        properties: {
-          query: { type: "string", description: "Поисковый запрос" },
-          count: { type: "number", description: "Количество результатов (1-50)", minimum: 1, maximum: 50, default: 10 },
-          country: { type: "string", description: "Код страны ISO 3166-1 alpha-2" },
-          language: { type: "string", description: "Код языка ISO 639-1" },
-          dateAfter: { type: "string", description: "Начало диапазона дат (ISO или YYYYMMDD)" },
-          dateBefore: { type: "string", description: "Конец диапазона дат (ISO или YYYYMMDD)" },
-        },
-        required: ["query"],
-      },
-      async execute(args: Record<string, unknown>): Promise<unknown> {
-        const result = await provider.search(args.query as string, {
-          count: (args.count as number) || 10,
-          country: args.country as string,
-          language: args.language as string,
-          dateAfter: args.dateAfter as string,
-          dateBefore: args.dateBefore as string,
-        });
-        return { results: result.results, total: result.total, error: result.error };
-      },
-    }),
-  };
+  const deadline = Date.now() + params.timeoutMs;
+  const pollUrl = `${YANDEX_OPERATIONS_URL}${encodeURIComponent(operationId)}`;
+  let delay = options.pollInitialDelayMs ?? YANDEX_POLL_INITIAL_DELAY_MS;
+  const interval = options.pollIntervalMs ?? YANDEX_POLL_INTERVAL_MS;
+
+  for (;;) {
+    try {
+      await sleep(delay, signal);
+    } catch (err) {
+      throw failure(err);
+    }
+    delay = interval;
+    if (Date.now() >= deadline) {
+      throw new EngineError("yandex", `таймаут ${params.timeoutMs} мс: операция ${operationId} не завершилась`);
+    }
+
+    let payload: OperationPayload;
+    try {
+      const response = await fetchImpl(pollUrl, { headers: authHeader, signal });
+      if (!response.ok) {
+        const detail = await readResponseText(response);
+        if (response.status === 429 || response.status >= 500) {
+          logger.debug?.(`[yandex] опрос операции ${operationId}: HTTP ${response.status}, повтор`);
+          continue;
+        }
+        throw new EngineError("yandex", `HTTP ${response.status} при опросе операции: ${detail}`, { status: response.status });
+      }
+      payload = (await response.json()) as OperationPayload;
+    } catch (err) {
+      if (err instanceof EngineError || signal.aborted) {
+        throw failure(err);
+      }
+      logger.debug?.(`[yandex] опрос операции ${operationId}: ${errorMessage(err)}, повтор`);
+      continue;
+    }
+
+    if (payload.error !== undefined && payload.error !== null) {
+      throw new EngineError("yandex", `операция завершилась ошибкой: ${describeOperationError(payload.error)}`);
+    }
+    if (!payload.done) {
+      continue;
+    }
+    const rawData = payload.response?.rawData;
+    if (typeof rawData !== "string" || !rawData) {
+      throw new EngineError("yandex", "операция завершена, но rawData пуст");
+    }
+    const parsed = parseYandexXml(Buffer.from(rawData, "base64").toString("utf8"));
+    if (parsed.error) {
+      if (parsed.error.code === YANDEX_NO_RESULTS_ERROR_CODE) {
+        return [];
+      }
+      const code = parsed.error.code ? ` (код ${parsed.error.code})` : "";
+      throw new EngineError("yandex", `ошибка поиска${code}: ${parsed.error.message}`);
+    }
+    return parsed.rows;
+  }
 }

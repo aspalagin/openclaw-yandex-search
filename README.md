@@ -1,44 +1,53 @@
 # openclaw-yandex-search
 
-Плагин OpenClaw, добавляющий **Yandex Search API v2** как провайдер веб-поиска и **Multi-Search** враппер (Yandex + Brave, параллельный, с дедупликацией).
+Плагин OpenClaw с двумя провайдерами `web_search`:
 
-## Структура файлов
+- **`yandex`** — Yandex Search API v2 (отложенный режим: `searchAsync` + опрос операции);
+- **`multi`** — Yandex + Brave параллельно, с дедупликацией по нормализованному URL.
 
-```
-openclaw-yandex-search/
-├── package.json          # npm-пакет с extensions/ полем
-├── tsconfig.json         # TypeScript конфиг
-├── index.ts              # Точка входа плагина
-├── openclaw.plugin.json  # Манифест плагина
-├── src/
-│   ├── types.ts          # Общие типы (YandexSearchResult, MultiSearchResult, etc.)
-│   ├── yandex.ts          # YandexSearchProvider + фабрика плагина
-│   └── multi.ts          # MultiSearchProvider + фабрика плагина
-├── scripts/
-│   ├── test-yandex.mjs   # Ручной тест YandexSearchProvider
-│   └── test-multi.mjs    # Ручной тест MultiSearchProvider
-└── test/                 # Unit-тесты с моками
-```
+Версия 0.2.0 написана под контракт web_search ядра OpenClaw 2026.9.x. История изменений — в [CHANGELOG.md](CHANGELOG.md).
 
-## Провайдеры
+## Как работает `multi`
 
-### `yandex`
-- **API**: Yandex Search API v2 (асинхронный: `POST searchAsync` → polling → base64 XML)
-- **Endpoint**: `https://searchapi.api.cloud.yandex.net/v2/web/searchAsync`
-- **Auth**: `Authorization: Api-Key <YC_API_KEY>`
-- **Folder**: `YC_FOLDER_ID`
-- **Параметры**: `query`, `count` (1-50), `language` (ru/en), `country`, `dateAfter`, `dateBefore`
+- Оба движка опрашиваются одновременно, у каждого просится по 10 результатов, модели отдаётся `count` строк
+  (по умолчанию 10; ядро всё равно режет выдачу до 10).
+- Дедупликация: без схемы, `www.`/`m.`, завершающего слэша, `index.html` и трекинговых параметров (`utm_*`, `yclid`, `fbclid`, ...).
+  Ссылки, найденные обоими движками, идут первыми, дальше чередование Яндекс/Brave.
+- **Ошибки.** Упал один движок — отдаются результаты второго, в лог Gateway пишется `warn` с именем движка и запросом.
+  Упали оба — инструмент возвращает `{ error: "provider_error", message }`, и модель видит ошибку, а не «ничего не найдено».
+  Не настроен ни один ключ — `{ error: "missing_api_key" }`. Каждый поиск оставляет строку
+  `[multi-search] yandex=N/ms brave=M/ms merged=K returned=R tookMs=T`.
+- **Формат строк** — ровно то, что принимает ядро: `title`, `url`, `snippet`, `published` (YYYY-MM-DD), `siteName`.
+  Строки без валидного http(s)-URL отбрасываются.
+- **Фильтры.** Аргументы читаются в snake_case, как их передаёт ядро: `count`, `country`, `language`, `freshness`,
+  `date_after`, `date_before`, `search_lang`, `ui_lang`.
+  - Brave: `country`, `search_lang` (или `language`), `ui_lang`, `freshness` = `pd|pw|pm|py` либо диапазон `YYYY-MM-DDtoYYYY-MM-DD`.
+  - Яндекс: `country` → `searchType` (RU/TR/KZ/BY/UZ, остальные → yandex.com), `language` → `l10n`,
+    даты → поле `period` (сутки / 2 недели / месяц — ближайший период, накрывающий запрос).
+    Диапазон, который периодами не выражается (старше месяца или с верхней границей в прошлом), Яндекс не получает:
+    на такой запрос отвечает один Brave.
+- **Таймауты и отмена.** Сигнал отмены ядра прокидывается во все запросы; бюджет времени берётся из
+  `tools.web.search.timeoutSeconds` (по умолчанию 30 с). Опрос операции Яндекса: первый через 300 мс, дальше каждые 500 мс,
+  на 4xx опрос прекращается, на 429/5xx и сетевых сбоях повторяется до дедлайна.
+- **Кэш.** Результаты кэшируются на `tools.web.search.cacheTtlMinutes` (по умолчанию 15 минут) через SDK OpenClaw,
+  а без него — через встроенную реализацию; ключ включает запрос, count и все фильтры. Неполные ответы не кэшируются.
+- **Почему не синхронный режим Яндекса.** По тарифу Search API синхронный запрос примерно в 16 раз дороже отложенного
+  (пример из документации: 250 000 синхронных = 122 000 ₽, 50 000 отложенных = 1 525 ₽). Секунда ожидания того не стоит.
 
-### `multi`
-- Параллельный поиск через **Yandex** и **Brave** одновременно
-- Дедупликация по нормализованному URL (убрать `www.`, trailing `/`, `utm_*`, `fbclid`, etc.)
-- Сортировка: сначала `both` (найдены обоими), затем чередование yandex/brave
-- Graceful degradation: если один провайдер упал — возвращаются результаты второго
+## Ключи
+
+Порядок поиска каждого значения (читается при каждом запросе, ротация не требует рестарта):
+
+1. `tools.web.search.yandex.apiKey`, `tools.web.search.yandex.folderId`, `tools.web.search.brave.apiKey`;
+2. `plugins.entries.openclaw-yandex-search.config.{yandex.apiKey, yandex.folderId, brave.apiKey}`;
+3. окружение Gateway: `YC_API_KEY` (или файл из `YC_API_KEY_FILE`), `YC_FOLDER_ID`, `BRAVE_SEARCH_API_KEY` (или `BRAVE_API_KEY`).
+
+Если не задан ни один ключ Brave, `multi` работает только через Яндекс, и наоборот.
 
 ## Установка и поставка
 
-Пакет не опубликован в npm (это проверяется перед релизом). Поддерживаемая
-модель поставки — клон репозитория как локального расширения OpenClaw:
+Пакет не публикуется в npm (поле `private`). Поддерживаемая модель поставки — клон репозитория как локального
+расширения OpenClaw:
 
 ```bash
 git clone https://github.com/aspalagin/openclaw-yandex-search.git \
@@ -47,75 +56,60 @@ cd ~/.openclaw/extensions/openclaw-yandex-search
 npm ci --omit=peer
 npm run build
 
-# Сделать runtime OpenClaw доступным как peer dependency после установки
-ln -sf /usr/lib/node_modules/openclaw node_modules/openclaw
+# Сделать runtime OpenClaw доступным как peer dependency (SDK ядра: кэш и разбор параметров)
+ln -sfn /usr/lib/node_modules/openclaw node_modules/openclaw
 ```
 
-После обновления клона повторите `npm ci --omit=peer` и `npm run build`. Каталог `dist/`
-создаётся локально и не хранится в репозитории. npm-публикация намеренно
-заблокирована полем `private` в `package.json`.
+После обновления клона повторите `npm ci --omit=peer`, `npm run build` и проверьте симлинк. Каталог `dist/`
+создаётся локально и не хранится в репозитории. Без симлинка плагин тоже работает: кэш и разбор параметров
+берутся из встроенной реализации, о чём один раз сообщается в лог.
 
 ## Регистрация в openclaw.json
 
 ```json
 {
-  "load": {
-    "paths": [
-      "~/.openclaw/extensions/openclaw-yandex-search"
-    ]
-  },
-  "entries": {
-    "openclaw-yandex-search": {
-      "enabled": true,
-      "config": {
-        "yandex": {
-          "apiKey": null,
-          "folderId": null
-        },
-        "multi": {
-          "maxResults": 10
+  "plugins": {
+    "load": { "paths": ["~/.openclaw/extensions/openclaw-yandex-search"] },
+    "entries": {
+      "openclaw-yandex-search": {
+        "enabled": true,
+        "config": {
+          "yandex": { "apiKey": null, "folderId": null },
+          "brave": { "apiKey": null },
+          "multi": { "maxResults": 10 }
         }
       }
-    }
+    },
+    "allow": ["openclaw-yandex-search"]
   },
-  "allow": ["openclaw-yandex-search"]
+  "tools": { "web": { "search": { "provider": "multi" } } }
 }
 ```
 
-## Переключение на multi как дефолтный провайдер
+Применить новую версию кода без рестарта: `openclaw plugins reload openclaw-yandex-search`.
 
-```json
-{
-  "tools": {
-    "web": {
-      "search": {
-        "provider": "multi"
-      }
-    }
-  }
-}
+## Структура
+
+```
+index.ts                 точка входа: регистрирует провайдеры yandex и multi
+src/env.ts               ключи из конфига и окружения (в т.ч. *_FILE)
+src/yandex.ts            Yandex Search API v2: тело запроса, опрос операции, разбор XML, period
+src/brave.ts             Brave Search API: параметры, повтор после 429, маппинг
+src/multi.ts             склейка и дедупликация, статусы движков, логи
+src/providers.ts         контракт провайдеров ядра, аргументы, кэш, таймауты
+src/sdk.ts               ленивый доступ к SDK ядра со встроенной запасной реализацией
+src/types/*.d.ts         типы для SDK-модуля provider-web-search (в SDK нет .d.ts)
+test/*.test.mjs          node:test, поддельный fetch и фикстуры (test/fixtures)
+scripts/smoke-*.mjs      живые проверки с ключами из окружения
 ```
 
-## Переменные окружения
-
-| Переменная        | Обязательно | Описание                    |
-|-------------------|-------------|-----------------------------|
-| `YC_API_KEY`      | Да          | Yandex Cloud API Key         |
-| `YC_FOLDER_ID`    | Да          | Yandex Cloud Folder ID       |
-| `BRAVE_SEARCH_API_KEY` | Нет (для multi) | Brave API Key (если не задан — multi работает только через Yandex) |
-
-## Тесты
+## Проверки
 
 ```bash
-# Unit-тесты без внешних ключей и сети
-npm test
-
-# TypeScript-проверка и сборка
-npm run typecheck
-npm run build
+npm run typecheck                 # TypeScript
+npm test                          # оффлайн, без ключей и сети (через tsx, сборка не нужна)
+npm run build                     # src → dist
+npm run smoke:multi -- "запрос"   # живой прогон, ключи из окружения, значения ключей не печатаются
 ```
 
-Скрипты `test:yandex` и `test:multi` оставлены для ручной проверки реального
-API: им требуются соответствующие ключи окружения. Правила вклада — в
-[CONTRIBUTING.md](CONTRIBUTING.md), политика безопасности — в
-[SECURITY.md](SECURITY.md), история изменений — в [CHANGELOG.md](CHANGELOG.md).
+Правила вклада — в [CONTRIBUTING.md](CONTRIBUTING.md), политика безопасности — в [SECURITY.md](SECURITY.md).

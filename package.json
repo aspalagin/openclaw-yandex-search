@@ -1,7 +1,7 @@
 {
   "name": "openclaw-yandex-search",
-  "version": "0.1.0",
-  "description": "Yandex Search API v2 + Multi-Search provider for OpenClaw",
+  "version": "0.2.0",
+  "description": "Yandex Search API v2 + Multi-Search (Yandex + Brave) web search providers for OpenClaw",
   "private": true,
   "license": "MIT",
   "repository": {
@@ -16,10 +16,10 @@
   "main": "./dist/index.js",
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
-    "typecheck": "tsc --noEmit",
-    "test": "node --import tsx --test test/**/*.test.ts",
-    "test:yandex": "node --input-type=module ./scripts/test-yandex.mjs",
-    "test:multi": "node --input-type=module ./scripts/test-multi.mjs"
+    "typecheck": "tsc -p tsconfig.build.json --noEmit",
+    "test": "node --import tsx --test test/*.test.mjs",
+    "smoke:multi": "node --import tsx ./scripts/smoke-multi.mjs",
+    "smoke:yandex": "node --import tsx ./scripts/smoke-yandex.mjs"
   },
   "openclaw": {
     "extensions": [
@@ -39,7 +39,7 @@
   },
   "peerDependenciesMeta": {
     "openclaw": {
-      "optional": false
+      "optional": true
     }
   }
 }

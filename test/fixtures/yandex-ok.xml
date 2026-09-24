@@ -1,0 +1,72 @@
+<?xml version="1.0" encoding="utf-8"?>
+<yandexsearch version="1.0">
+<request>
+<query>МТС новости сентябрь 2026</query>
+<page>0</page>
+<sortby order="descending" priority="no">rlv</sortby>
+<maxpassages>2</maxpassages>
+<groupings>
+<groupby attr="d" mode="deep" groups-on-page="10" docs-in-group="1" curcateg="-1"/>
+</groupings>
+</request>
+<response date="20260924T020000">
+<reqid>1758672000000000-1234567890-balancer</reqid>
+<found priority="phrase">1532</found>
+<found priority="strict">1532</found>
+<found priority="all">1532</found>
+<found-human>Нашлось 2 тыс. ответов</found-human>
+<results>
+<grouping attr="d" mode="deep" groups-on-page="10" docs-in-group="1" curcateg="-1">
+<page first="1" last="3">0</page>
+<group>
+<categ attr="d" name="moskva.mts.ru"/>
+<doccount>1</doccount>
+<relevance/>
+<doc id="ZC8F6A1B2C3D4E5F">
+<relevance/>
+<url>https://moskva.mts.ru/personal/novosti/2026-09-11/mts-zapuskaet-setj-5g?utm_source=test</url>
+<domain>moskva.mts.ru</domain>
+<title><hlword>МТС</hlword> запускает сеть 5G &amp; Супер 5G | 11 <hlword>сентября</hlword> 2026</title>
+<headline>Новости МТС</headline>
+<modtime>20260911T093000</modtime>
+<size>48210</size>
+<charset>utf-8</charset>
+<passages>
+<passage>11 <hlword>сентября</hlword> мы первыми в России открыли свободный доступ к сети Супер 5G.</passage>
+<passage>Сеть 5G запущена в пяти крупных городах.</passage>
+</passages>
+<mime-type>text/html</mime-type>
+</doc>
+</group>
+<group>
+<categ attr="d" name="rbc.ru"/>
+<doccount>1</doccount>
+<relevance/>
+<doc id="A1B2C3">
+<relevance/>
+<url>https://www.rbc.ru/quote/16/09/2026/6aa97b899a7947647aba441c</url>
+<domain>www.rbc.ru</domain>
+<title>Дивиденды <hlword>МТС</hlword>: новая политика</title>
+<modtime>20260916T120000</modtime>
+<passages>
+<passage>Совет директоров <hlword>МТС</hlword> утвердил новую дивидендную политику.</passage>
+</passages>
+<mime-type>text/html</mime-type>
+</doc>
+</group>
+<group>
+<categ attr="d" name="files.example.org"/>
+<doccount>1</doccount>
+<relevance/>
+<doc id="BAD">
+<relevance/>
+<url>ftp://files.example.org/archive</url>
+<domain>files.example.org</domain>
+<title>Не http</title>
+<passages><passage>должен быть отброшен</passage></passages>
+</doc>
+</group>
+</grouping>
+</results>
+</response>
+</yandexsearch>

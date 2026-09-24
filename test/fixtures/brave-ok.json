@@ -1,0 +1,30 @@
+{
+  "type": "search",
+  "query": { "original": "МТС новости сентябрь 2026" },
+  "web": {
+    "type": "search",
+    "results": [
+      {
+        "title": "МТС запускает сеть <strong>5G</strong>",
+        "url": "https://moskva.mts.ru/personal/novosti/2026-09-11/mts-zapuskaet-setj-5g",
+        "description": "11 сентября &quot;МТС&quot; открыла свободный доступ к сети Супер 5G со скоростью до 1,5 Гбит/с в пяти крупных городах и запустила сеть 5G.",
+        "age": "1 week ago",
+        "page_age": "2026-09-11T09:30:00",
+        "meta_url": { "hostname": "moskva.mts.ru", "favicon": "https://imgs.search.brave.com/x.ico" },
+        "type": "search_result"
+      },
+      {
+        "title": "Новости",
+        "url": "https://www.mts.by/news/",
+        "description": "Современное устройство должно уметь все: красиво смотреться, быстро работать и защищать ваши данные.",
+        "page_age": "2026-09-18T00:00:00",
+        "meta_url": { "hostname": "www.mts.by" },
+        "type": "search_result"
+      },
+      {
+        "title": "Без URL",
+        "description": "должен быть отброшен"
+      }
+    ]
+  }
+}

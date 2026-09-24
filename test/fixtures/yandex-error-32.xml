@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<yandexsearch version="1.0">
+<request>
+<query>МТС</query>
+<page>0</page>
+</request>
+<response date="20260924T020000">
+<error code="32">Превышен лимит запросов</error>
+<reqid>1758672000000000-1111111111-balancer</reqid>
+</response>
+</yandexsearch>

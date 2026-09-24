@@ -1,8 +1,8 @@
 {
   "id": "openclaw-yandex-search",
   "name": "Yandex Search + Multi-Search",
-  "description": "Yandex Search API v2 как провайдер веб-поиска и Multi-Search враппер, объединяющий Yandex + Brave с дедупликацией",
-  "version": "0.1.0",
+  "description": "Yandex Search API v2 как провайдер веб-поиска и Multi-Search: Yandex + Brave параллельно, с дедупликацией и учётом ошибок движков",
+  "version": "0.2.0",
   "contracts": {
     "webSearchProviders": [
       "yandex",
@@ -17,25 +17,38 @@
           "YC_API_KEY",
           "YC_FOLDER_ID"
         ]
+      },
+      {
+        "id": "multi",
+        "envVars": [
+          "YC_API_KEY",
+          "YC_FOLDER_ID",
+          "BRAVE_SEARCH_API_KEY"
+        ]
       }
     ]
   },
   "uiHints": {
-    "webSearch.apiKey": {
+    "yandex.apiKey": {
       "label": "Yandex Cloud API Key",
-      "help": "Yandex Cloud API Key для Search API (fallback: YC_API_KEY env var).",
+      "help": "API-ключ Yandex Cloud для Search API. Если пусто, берётся YC_API_KEY или файл из YC_API_KEY_FILE в окружении Gateway.",
       "sensitive": true,
       "placeholder": "AQVN..."
     },
-    "webSearch.folderId": {
+    "yandex.folderId": {
       "label": "Yandex Cloud Folder ID",
-      "help": "Folder ID из Yandex Cloud (fallback: YC_FOLDER_ID env var)."
+      "help": "Каталог Yandex Cloud, в котором включён Search API. Если пусто, берётся YC_FOLDER_ID."
+    },
+    "brave.apiKey": {
+      "label": "Brave Search API Key",
+      "help": "Ключ Brave Search для второго движка Multi-Search. Если пусто, берётся BRAVE_SEARCH_API_KEY или BRAVE_API_KEY.",
+      "sensitive": true,
+      "placeholder": "BSA..."
+    },
+    "multi.maxResults": {
+      "label": "Multi-Search: результатов по умолчанию",
+      "help": "Сколько строк отдавать модели, если инструмент не передал count (1–10)."
     }
-  },
-  "configContracts": {
-    "compatibilityRuntimePaths": [
-      "tools.web.search.apiKey"
-    ]
   },
   "configSchema": {
     "type": "object",
@@ -60,6 +73,19 @@
           }
         }
       },
+      "brave": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "apiKey": {
+            "type": [
+              "string",
+              "object",
+              "null"
+            ]
+          }
+        }
+      },
       "multi": {
         "type": "object",
         "additionalProperties": false,
@@ -67,7 +93,7 @@
           "maxResults": {
             "type": "number",
             "minimum": 1,
-            "maximum": 50,
+            "maximum": 10,
             "default": 10
           }
         }

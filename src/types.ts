@@ -1,102 +1,61 @@
 /**
- * Типы для Yandex Search API v2 и Multi-Search провайдера
- * Yandex Search API: https://cloud.yandex.ru/docs/search-api/
+ * Общие типы плагина openclaw-yandex-search.
  */
 
-export interface YandexSearchResult {
-  /** Заголовок результата */
+/**
+ * Строка результата в формате, который принимает ядро OpenClaw на границе web_search.
+ * Ядро оставляет только title, url, snippet, published и siteName; остальные поля отбрасывает.
+ */
+export interface SearchRow {
   title: string;
-  /** URL страницы */
   url: string;
-  /** Сниппет / описание */
-  description: string;
-  /** Дата документа (ISO) */
-  date?: string;
-  /** Иконка/фавиконка */
-  favicon?: string;
-  /** Тип документа (site, news, etc.) */
-  type?: string;
+  snippet: string;
+  /** Дата публикации в формате YYYY-MM-DD (другие форматы ядро отбрасывает). */
+  published?: string;
+  /** Имя сайта (hostname). */
+  siteName?: string;
 }
 
-export interface YandexSearchOptions {
-  /** Текстовый запрос */
-  query?: string;
-  /** Количество результатов (1-50, default 10) */
-  count?: number;
-  /** Код страны (ISO 3166-1 alpha-2, например RU, US) */
+export type EngineId = "yandex" | "brave";
+
+/** Нормализованные параметры одного поискового вызова, общие для движков. */
+export interface EngineSearchParams {
+  query: string;
+  /** Сколько результатов запрашивать у движка. */
+  count: number;
+  /** Код страны ISO 3166-1 alpha-2 или undefined. */
   country?: string;
-  /** Код языка (ISO 639-1, например ru, en) */
+  /** Код языка ISO 639-1 или undefined. */
   language?: string;
-  /** Фильтр по дате — начало диапазона (ISO date или YYYYMMDD) */
+  /** Код языка выдачи Brave (en, en-gb, ru, ...). */
+  searchLang?: string;
+  /** Локаль интерфейса Brave (en-US). */
+  uiLang?: string;
+  /** Свежесть в кодах Brave: pd, pw, pm или py. */
+  freshness?: string;
+  /** Нижняя граница даты публикации, YYYY-MM-DD. */
   dateAfter?: string;
-  /** Фильтр по дате — конец диапазона (ISO date или YYYYMMDD) */
+  /** Верхняя граница даты публикации, YYYY-MM-DD. */
   dateBefore?: string;
+  /** Внешний сигнал отмены от ядра. */
+  signal?: AbortSignal;
+  /** Бюджет времени на вызов движка, мс. */
+  timeoutMs: number;
 }
 
-export interface YandexSearchResponse {
-  /** Результаты поиска */
-  results: YandexSearchResult[];
-  /** Общее число найденных документов */
-  total?: number;
-  /** Текст ошибки при неудаче */
-  error?: string;
+export interface PluginLogger {
+  debug?: (message: string) => void;
+  info: (message: string) => void;
+  warn: (message: string) => void;
+  error: (message: string) => void;
 }
 
-export interface YandexApiRawResponse {
-  /** Корневой элемент ответа */
-  yandexsearchresponse?: {
-    responsecode?: string;
-    relevance?: string;
-    found?: Array<{ "@count": string; "@more": string }>;
-    results?: {
-      grouping?: Array<{
-        attr?: string;
-        doccount?: string;
-        grpobjcount?: string;
-        groups?: Array<{
-          "@key": string;
-          "@size": string;
-          doc?: YandexApiRawDocument | YandexApiRawDocument[];
-        }>;
-      }>;
-    };
-  };
-  response?: {
-    "@code"?: string;
-    "@error-code"?: string;
-    "@error-message"?: string;
-  };
-}
+export type FetchLike = typeof fetch;
 
-export interface YandexApiRawDocument {
-  /** URL документа */
-  url?: { "@href": string; "@date": string };
-  /** Домен */
-  domain?: { "@name": string; "@flavor": string };
-  /** Заголовок — строка или массив сегментов { text, hl } */
-  title?: string | Array<{ _text: string; hl?: string }>;
-  /** Сниппет */
-  passage?: Array<{ _text: string; hl?: string }> | { _text: string; hl?: string };
-  /** Метаданные — дата */
-  meta?: { "@name": string; "@content": string } | Array<{ "@name": string; "@content": string }>;
-  /** Иконка */
-  mime_type?: string;
-  /** Тип документа */
-  doctype?: { "@subtype": string; "#text": string } | string;
-}
-
-/** Нормализованный результат с информацией об источнике */
-export interface MultiSearchResult extends YandexSearchResult {
-  source: "yandex" | "brave" | "both";
-}
-
-/** Опции для Multi-Search */
-export interface MultiSearchOptions extends YandexSearchOptions {
-  /** Максимальное число итоговых результатов */
-  maxResults?: number;
-}
-
-/** Провайдер-делегат (для внутреннего использования) */
-export interface SearchDelegate {
-  search(query: string, options?: YandexSearchOptions): Promise<YandexSearchResponse>;
+/** Состояние одного движка после вызова multi-search. */
+export interface EngineStatus {
+  state: "ok" | "failed" | "skipped";
+  count: number;
+  tookMs: number;
+  detail?: string;
 }

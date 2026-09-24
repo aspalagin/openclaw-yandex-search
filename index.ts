@@ -1,75 +1,39 @@
 /**
- * openclaw-yandex-search plugin
+ * openclaw-yandex-search: провайдеры web_search для OpenClaw.
  *
- * Регистрирует два провайдера веб-поиска:
- *  - yandex  — Yandex Search API v2
- *  - multi   — Multi-Search (Yandex + Brave, параллельный, с дедупликацией)
+ *  - yandex — Yandex Search API v2 (отложенный режим);
+ *  - multi  — Yandex + Brave параллельно, с дедупликацией.
+ *
+ * Ключи читаются при каждом поиске (конфиг плагина → tools.web.search → окружение, включая *_FILE),
+ * ошибки движков попадают в лог Gateway и, если упали все, в ответ инструмента.
  */
 
-import { createYandexSearchProviderPlugin } from "./src/yandex.js";
-import { createMultiSearchProviderPlugin } from "./src/multi.js";
+import { PLUGIN_ID } from "./src/env.js";
+import {
+  createMultiSearchProviderPlugin,
+  createYandexSearchProviderPlugin,
+  type WebSearchProviderShape,
+} from "./src/providers.js";
+import type { PluginLogger } from "./src/types.js";
 
-const yandexApiKey = process.env.YC_API_KEY ?? "";
-const yandexFolderId = process.env.YC_FOLDER_ID ?? "";
-const braveApiKey = process.env.BRAVE_SEARCH_API_KEY ?? null;
+export type { SearchRow } from "./src/types.js";
 
-if (!yandexApiKey) {
-  console.warn("[openclaw-yandex-search] ВНИМАНИЕ: YC_API_KEY не найден в окружении. Провайдер Yandex будет работать только при ручной установке apiKey.");
+interface PluginRegisterApi {
+  logger?: PluginLogger;
+  pluginConfig?: Record<string, unknown>;
+  registerWebSearchProvider: (provider: WebSearchProviderShape) => void;
 }
-if (!yandexFolderId) {
-  console.warn("[openclaw-yandex-search] ВНИМАНИЕ: YC_FOLDER_ID не найден в окружении.");
-}
-
-// Фабричные функции вызываются при загрузке плагина, а не при регистрации.
-// Провайдеры будут созданы с ключами из окружения.
-// Для гибкости — читаем ключи динамически при каждом register().
-const yandexPlugin = createYandexSearchProviderPlugin({
-  apiKey: yandexApiKey,
-  folderId: yandexFolderId,
-});
-
-const multiPlugin = createMultiSearchProviderPlugin({
-  yandexApiKey,
-  yandexFolderId,
-  braveApiKey,
-  maxResults: 10,
-});
-
-// Реэкспорт типов
-export type { YandexSearchResult, YandexSearchOptions, YandexSearchResponse, MultiSearchResult, MultiSearchOptions } from "./src/types.js";
 
 const plugin = {
-  id: "openclaw-yandex-search",
+  id: PLUGIN_ID,
   name: "Yandex Search + Multi-Search",
-  description: "Yandex Search API v2 как провайдер веб-поиска и Multi-Search враппер (Yandex + Brave)",
-  configSchema: {
-    type: "object" as const,
-    additionalProperties: false,
-    properties: {
-      yandex: {
-        type: "object",
-        additionalProperties: false,
-        properties: {
-          apiKey: { type: ["string", "object", "null"] },
-          folderId: { type: ["string", "null"] },
-        },
-      },
-      multi: {
-        type: "object",
-        additionalProperties: false,
-        properties: {
-          maxResults: { type: "number", minimum: 1, maximum: 50, default: 10 },
-        },
-      },
-    },
-  },
-  register(api: {
-    runtime: unknown;
-    registerWebSearchProvider: (provider: ReturnType<typeof createYandexSearchProviderPlugin>) => void;
-    logger: { info: (msg: string) => void; warn?: (msg: string) => void; debug?: (msg: string) => void };
-  }) {
-    api.registerWebSearchProvider(yandexPlugin);
-    api.registerWebSearchProvider(multiPlugin);
+  description: "Yandex Search API v2 как провайдер веб-поиска и Multi-Search (Yandex + Brave параллельно, с дедупликацией)",
+  register(api: PluginRegisterApi) {
+    const logger: PluginLogger = api.logger ?? console;
+    const deps = { logger, pluginConfig: api.pluginConfig };
+    api.registerWebSearchProvider(createYandexSearchProviderPlugin(deps));
+    api.registerWebSearchProvider(createMultiSearchProviderPlugin(deps));
+    logger.info(`[${PLUGIN_ID}] провайдеры web_search зарегистрированы: yandex, multi`);
   },
 };
 
