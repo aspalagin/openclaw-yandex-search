@@ -2,6 +2,18 @@
 
 Все заметные изменения проекта фиксируются в этом файле.
 
+## 0.2.2 — 2026-09-27
+
+Публикация в ClawHub и npm. Логика поиска не менялась.
+
+- Пакет опубликован под scoped-именем `@aspalagin/openclaw-yandex-search`; id плагина в конфиге прежний, `openclaw-yandex-search`.
+  Установка: `openclaw plugins install clawhub:@aspalagin/openclaw-yandex-search` или `npm:@aspalagin/openclaw-yandex-search`.
+- Новое отображаемое имя — «Yandex + Brave Search»: плагин в первую очередь даёт параллельный поиск по двум движкам,
+  одиночный провайдер `yandex` остаётся.
+- Метаданные совместимости: `openclaw.compat` и `openclaw.build` (OpenClaw 2026.9.6), `peerDependencies.openclaw` `>=2026.9.6`,
+  `engines.node` `>=22`, категория каталога `web`.
+- В пакет входят собранный `dist`, манифест, README, CHANGELOG и LICENSE; сборка выполняется в `prepack`.
+
 ## 0.2.1 — 2026-09-24
 
 - Таймаут запросов к движкам реализован собственным таймером вместо `AbortSignal.timeout`: тот не удерживает цикл событий,

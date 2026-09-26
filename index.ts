@@ -26,8 +26,9 @@ interface PluginRegisterApi {
 
 const plugin = {
   id: PLUGIN_ID,
-  name: "Yandex Search + Multi-Search",
-  description: "Yandex Search API v2 как провайдер веб-поиска и Multi-Search (Yandex + Brave параллельно, с дедупликацией)",
+  name: "Yandex + Brave Search",
+  description:
+    "Yandex + Brave: параллельный веб-поиск по двум движкам с дедупликацией и учётом ошибок движков. Отдельно доступен провайдер Yandex Search API v2.",
   register(api: PluginRegisterApi) {
     const logger: PluginLogger = api.logger ?? console;
     const deps = { logger, pluginConfig: api.pluginConfig };

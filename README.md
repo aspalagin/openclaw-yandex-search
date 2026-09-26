@@ -1,11 +1,20 @@
-# openclaw-yandex-search
+# openclaw-yandex-search — Yandex + Brave для OpenClaw
 
-Плагин OpenClaw с двумя провайдерами `web_search`:
+Веб-поиск для OpenClaw сразу по двум движкам: **Яндекс и Brave** опрашиваются параллельно, результаты сливаются
+в одну выдачу и дедуплицируются по нормализованному URL (провайдер `multi`). Если один движок упал или не настроен,
+отвечает второй. Дополнительно в пакете есть одиночный провайдер `yandex` — Yandex Search API v2 без Brave.
 
-- **`yandex`** — Yandex Search API v2 (отложенный режим: `searchAsync` + опрос операции);
-- **`multi`** — Yandex + Brave параллельно, с дедупликацией по нормализованному URL.
+**In English.** Yandex + Brave web search for OpenClaw: the `multi` provider queries both engines in parallel,
+merges the results and removes duplicates, and keeps answering if one engine fails. A standalone `yandex` provider
+(Yandex Search API v2) is included as well.
 
-Версия 0.2.0 написана под контракт web_search ядра OpenClaw 2026.9.x. История изменений — в [CHANGELOG.md](CHANGELOG.md).
+Провайдеры `web_search`:
+
+- **`multi`** — Yandex + Brave параллельно, со слиянием и дедупликацией по нормализованному URL;
+- **`yandex`** — Yandex Search API v2 (отложенный режим: `searchAsync` + опрос операции).
+
+Версия 0.2.2 написана под контракт web_search ядра OpenClaw 2026.9.x (проверена на 2026.9.6).
+История изменений — в [CHANGELOG.md](CHANGELOG.md).
 
 ## Как работает `multi`
 
@@ -44,10 +53,36 @@
 
 Если не задан ни один ключ Brave, `multi` работает только через Яндекс, и наоборот.
 
-## Установка и поставка
+## Установка
 
-Пакет не публикуется в npm (поле `private`). Поддерживаемая модель поставки — клон репозитория как локального
-расширения OpenClaw:
+Пакет опубликован в ClawHub и npm под именем `@aspalagin/openclaw-yandex-search`
+(id плагина в конфиге остаётся `openclaw-yandex-search`):
+
+```bash
+# из ClawHub
+openclaw plugins install clawhub:@aspalagin/openclaw-yandex-search
+
+# или из npm
+openclaw plugins install npm:@aspalagin/openclaw-yandex-search
+```
+
+В неинтерактивном режиме OpenClaw может потребовать флаг `--accept-capabilities`, а для npm-источника ещё и `--force`.
+
+Дальше настройте ключи и выберите провайдера:
+
+1. Задайте ключи в окружении Gateway: `YC_API_KEY` и `YC_FOLDER_ID` (Яндекс), `BRAVE_SEARCH_API_KEY` (Brave).
+   Вместо окружения ключи можно положить в конфиг, см. раздел «Ключи» выше.
+2. Включите поиск по двум движкам:
+
+   ```bash
+   openclaw config set tools.web.search.provider multi
+   ```
+
+   Для поиска только через Яндекс укажите `yandex`.
+
+## Установка из исходников
+
+Альтернатива — клон репозитория как локального расширения OpenClaw:
 
 ```bash
 git clone https://github.com/aspalagin/openclaw-yandex-search.git \
@@ -65,6 +100,8 @@ ln -sfn /usr/lib/node_modules/openclaw node_modules/openclaw
 берутся из встроенной реализации, о чём один раз сообщается в лог.
 
 ## Регистрация в openclaw.json
+
+Пример для установки из исходников (при установке через `openclaw plugins install` блок `plugins.load.paths` не нужен):
 
 ```json
 {

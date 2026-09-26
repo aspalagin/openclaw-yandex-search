@@ -1,9 +1,22 @@
 {
-  "name": "openclaw-yandex-search",
-  "version": "0.2.1",
-  "description": "Yandex Search API v2 + Multi-Search (Yandex + Brave) web search providers for OpenClaw",
-  "private": true,
+  "name": "@aspalagin/openclaw-yandex-search",
+  "version": "0.2.2",
+  "description": "Yandex + Brave web search for OpenClaw: both engines queried in parallel, results merged and deduplicated. Also ships a standalone Yandex Search API v2 provider.",
+  "keywords": [
+    "openclaw",
+    "openclaw-plugin",
+    "web-search",
+    "yandex",
+    "yandex-search",
+    "brave",
+    "brave-search",
+    "multi-search",
+    "search"
+  ],
   "license": "MIT",
+  "engines": {
+    "node": ">=22"
+  },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/aspalagin/openclaw-yandex-search.git"
@@ -14,8 +27,19 @@
   },
   "type": "module",
   "main": "./dist/index.js",
+  "publishConfig": {
+    "access": "public"
+  },
+  "files": [
+    "dist",
+    "openclaw.plugin.json",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE"
+  ],
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
+    "prepack": "npm run build",
     "typecheck": "tsc -p tsconfig.build.json --noEmit",
     "test": "node --import tsx --test test/*.test.mjs",
     "smoke:multi": "node --import tsx ./scripts/smoke-multi.mjs",
@@ -24,7 +48,15 @@
   "openclaw": {
     "extensions": [
       "./dist/index.js"
-    ]
+    ],
+    "compat": {
+      "pluginApi": ">=2026.9.6",
+      "minGatewayVersion": "2026.9.6"
+    },
+    "build": {
+      "openclawVersion": "2026.9.6",
+      "pluginSdkVersion": "2026.9.6"
+    }
   },
   "devDependencies": {
     "@types/node": "^25.5.0",
@@ -35,7 +67,7 @@
     "fast-xml-parser": "^5.10.0"
   },
   "peerDependencies": {
-    "openclaw": "*"
+    "openclaw": ">=2026.9.6"
   },
   "peerDependenciesMeta": {
     "openclaw": {
