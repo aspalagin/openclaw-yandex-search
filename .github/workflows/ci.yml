@@ -27,7 +27,11 @@ jobs:
           cache: npm
       - run: npm ci --omit=peer
       - if: matrix.sdk != 'none'
-        run: npm install --no-save --package-lock=false --ignore-scripts --no-audit --no-fund openclaw@${{ matrix.sdk }}
+        # npm can skip a --no-save install that is already an optional peer.
+        # Install the host separately so this job always uses the real SDK.
+        run: |
+          npm install --prefix "$RUNNER_TEMP/openclaw-sdk" --ignore-scripts --no-audit --no-fund openclaw@${{ matrix.sdk }}
+          ln -s "$RUNNER_TEMP/openclaw-sdk/node_modules/openclaw" node_modules/openclaw
       - run: npm run typecheck
       - run: npm test
         env:
