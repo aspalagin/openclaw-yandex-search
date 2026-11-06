@@ -11,9 +11,10 @@ merges the results and removes duplicates, and keeps answering if one engine fai
 Провайдеры `web_search`:
 
 - **`multi`** — Yandex + Brave параллельно, со слиянием и дедупликацией по нормализованному URL;
-- **`yandex`** — Yandex Search API v2 (отложенный режим: `searchAsync` + опрос операции).
+- **`yandex`** — Yandex Search API v2 (отложенный режим: `searchAsync` + опрос операции; при отказе 429/501 на старте —
+  синхронный `/v2/web/search`, см. `yandex.mode`).
 
-Версия 0.2.2 написана под контракт web_search ядра OpenClaw 2026.9.x (проверена на 2026.9.6).
+Версия 0.2.3 написана под контракт web_search ядра OpenClaw 2026.9.x (проверена на 2026.9.6 и 2026.9.7).
 История изменений — в [CHANGELOG.md](CHANGELOG.md).
 
 ## Как работает `multi`
@@ -40,8 +41,15 @@ merges the results and removes duplicates, and keeps answering if one engine fai
   на 4xx опрос прекращается, на 429/5xx и сетевых сбоях повторяется до дедлайна.
 - **Кэш.** Результаты кэшируются на `tools.web.search.cacheTtlMinutes` (по умолчанию 15 минут) через SDK OpenClaw,
   а без него — через встроенную реализацию; ключ включает запрос, count и все фильтры. Неполные ответы не кэшируются.
-- **Почему не синхронный режим Яндекса.** По тарифу Search API синхронный запрос примерно в 16 раз дороже отложенного
-  (пример из документации: 250 000 синхронных = 122 000 ₽, 50 000 отложенных = 1 525 ₽). Секунда ожидания того не стоит.
+- **Режим Яндекса (`yandex.mode`).** По тарифу Search API синхронный запрос примерно в 16 раз дороже отложенного
+  (пример из документации: 250 000 синхронных = 122 000 ₽, 50 000 отложенных = 1 525 ₽), поэтому основной путь — отложенный.
+  - `auto` (по умолчанию): `searchAsync`; если он отвергает запрос на старте кодом 429 («search rate limit exceeded»)
+    или 501 («unknown service»), тот же запрос сразу повторяется синхронным `POST /v2/web/search`, в лог пишется `warn`
+    `[yandex] searchAsync отвергнут (HTTP 429), повтор синхронным /v2/web/search`. С октября 2026 отложенный сервис
+    подолгу отвечает так на каждый запрос, синхронный при этом работает. 429 при опросе операции, 4xx авторизации и
+    таймауты фолбэк не вызывают.
+  - `async`: только отложенный режим (поведение до 0.2.3).
+  - `sync`: только синхронный метод.
 
 ## Ключи
 
@@ -111,7 +119,7 @@ ln -sfn /usr/lib/node_modules/openclaw node_modules/openclaw
       "openclaw-yandex-search": {
         "enabled": true,
         "config": {
-          "yandex": { "apiKey": null, "folderId": null },
+          "yandex": { "apiKey": null, "folderId": null, "mode": "auto" },
           "brave": { "apiKey": null },
           "multi": { "maxResults": 10 }
         }

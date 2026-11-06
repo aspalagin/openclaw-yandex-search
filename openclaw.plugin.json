@@ -2,7 +2,7 @@
   "id": "openclaw-yandex-search",
   "name": "Yandex + Brave Search",
   "description": "Yandex + Brave: параллельный веб-поиск по двум движкам с дедупликацией и учётом ошибок движков. Отдельно доступен провайдер Yandex Search API v2.",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "categories": [
     "web"
   ],
@@ -42,6 +42,10 @@
       "label": "Yandex Cloud Folder ID",
       "help": "Каталог Yandex Cloud, в котором включён Search API. Если пусто, берётся YC_FOLDER_ID."
     },
+    "yandex.mode": {
+      "label": "Yandex: режим запросов",
+      "help": "auto (по умолчанию): отложенный searchAsync, при отказе 429/501 на старте — синхронный /v2/web/search. async: только отложенный. sync: только синхронный (по тарифу примерно в 16 раз дороже)."
+    },
     "brave.apiKey": {
       "label": "Brave Search API Key",
       "help": "Ключ Brave Search для второго движка Multi-Search. Если пусто, берётся BRAVE_SEARCH_API_KEY или BRAVE_API_KEY.",
@@ -73,6 +77,15 @@
               "string",
               "null"
             ]
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "auto",
+              "async",
+              "sync"
+            ],
+            "default": "auto"
           }
         }
       },
