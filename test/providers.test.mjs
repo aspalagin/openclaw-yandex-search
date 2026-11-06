@@ -63,6 +63,9 @@ test("встроенный sdk: кэш с TTL, TTL 0 отключает кэш, 
 test("loadWebSearchSdk: возвращает объект с нужными функциями и кэшируется", async () => {
   resetWebSearchSdk();
   const sdk = await loadWebSearchSdk();
+  if (process.env.REQUIRE_OPENCLAW_SDK === "1") {
+    assert.notEqual(sdk, localWebSearchSdk, "CI must load the installed OpenClaw SDK without falling back");
+  }
   for (const name of ["buildSearchCacheKey", "readCachedSearchPayload", "writeCachedSearchPayload", "resolveSearchCacheTtlMs", "resolveSearchTimeoutSeconds", "resolveSearchCount", "readStringParam", "readPositiveIntegerParam", "parseWebSearchTimeFilters"]) {
     assert.equal(typeof sdk[name], "function", name);
   }

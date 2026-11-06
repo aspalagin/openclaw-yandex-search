@@ -105,6 +105,12 @@ export function resolveCredentials(sources: CredentialSources = {}): Credentials
   };
 }
 
+/** plugins.entries.<id>.config.yandex.mode (auto | async | sync) либо undefined, если не задан. */
+export function pluginYandexMode(config: unknown, pluginConfig?: Record<string, unknown>): unknown {
+  const entry = pluginEntryConfig(config) ?? pluginConfig;
+  return asRecord(entry?.yandex)?.mode;
+}
+
 /** plugins.entries.<id>.config.multi.maxResults, приведённое к диапазону 1–10, либо undefined. */
 export function pluginMaxResults(config: unknown, pluginConfig?: Record<string, unknown>): number | undefined {
   const entry = pluginEntryConfig(config) ?? pluginConfig;

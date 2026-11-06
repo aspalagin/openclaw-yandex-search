@@ -72,6 +72,12 @@ export function yandexOperation(xml, { done = true, id = "op-1" } = {}) {
 }
 
 export const YANDEX_ASYNC = "https://searchapi.api.cloud.yandex.net/v2/web/searchAsync";
+export const YANDEX_SYNC = "https://searchapi.api.cloud.yandex.net/v2/web/search";
+
+/** Ответ синхронного WebSearch.Search: base64-XML сразу в rawData. */
+export function yandexSyncResponse(xml) {
+  return { rawData: Buffer.from(xml, "utf8").toString("base64") };
+}
 export const YANDEX_OPS = "https://operation.api.cloud.yandex.net/operations/";
 export const BRAVE = "https://api.search.brave.com/res/v1/web/search";
 

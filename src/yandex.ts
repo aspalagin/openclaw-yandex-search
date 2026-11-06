@@ -1,13 +1,16 @@
 /**
- * Yandex Search API v2, отложенный режим.
+ * Yandex Search API v2.
  *
- * POST https://searchapi.api.cloud.yandex.net/v2/web/searchAsync  → id операции,
+ * Отложенный режим (основной): POST https://searchapi.api.cloud.yandex.net/v2/web/searchAsync → id операции,
  * затем GET https://operation.api.cloud.yandex.net/operations/{id} до done=true.
  * Результат — base64-XML (<yandexsearch>) в response.rawData.
  *
- * Синхронный режим (/v2/web/search) намеренно не используется: по тарифу Yandex Search API
- * синхронный запрос примерно в 16 раз дороже отложенного (пример расчёта в документации:
- * 250 000 синхронных = 122 000 ₽, 50 000 отложенных = 1 525 ₽).
+ * Синхронный режим: POST https://searchapi.api.cloud.yandex.net/v2/web/search с тем же телом,
+ * rawData приходит сразу. По тарифу Yandex Search API синхронный запрос примерно в 16 раз дороже
+ * отложенного (пример расчёта в документации: 250 000 синхронных = 122 000 ₽, 50 000 отложенных = 1 525 ₽),
+ * поэтому по умолчанию (`mode: "auto"`) он используется только как запасной путь, когда searchAsync
+ * отвергает запрос на старте кодами 429 («rate limit exceeded») или 501 («unknown service»):
+ * с октября 2026 отложенный сервис подолгу отвечает так на каждый запрос, а синхронный работает.
  */
 
 import { XMLParser } from "fast-xml-parser";
@@ -28,7 +31,25 @@ import {
 } from "./util.js";
 
 export const YANDEX_SEARCH_ASYNC_URL = "https://searchapi.api.cloud.yandex.net/v2/web/searchAsync";
+export const YANDEX_SEARCH_SYNC_URL = "https://searchapi.api.cloud.yandex.net/v2/web/search";
 export const YANDEX_OPERATIONS_URL = "https://operation.api.cloud.yandex.net/operations/";
+
+/**
+ * Режим обращения к API:
+ *  - auto  — searchAsync; если он отвергнут на старте кодом из YANDEX_SYNC_FALLBACK_STATUSES, повтор синхронным запросом;
+ *  - async — только отложенный режим (поведение до 0.2.3);
+ *  - sync  — только синхронный запрос (дороже, зато без опроса операции).
+ */
+export type YandexMode = "auto" | "async" | "sync";
+export const YANDEX_MODES: readonly YandexMode[] = ["auto", "async", "sync"];
+export const YANDEX_DEFAULT_MODE: YandexMode = "auto";
+/** HTTP-статусы запуска searchAsync, после которых в режиме auto запрос повторяется синхронно. */
+export const YANDEX_SYNC_FALLBACK_STATUSES: ReadonlySet<number> = new Set([429, 501]);
+
+export function resolveYandexMode(value: unknown): YandexMode {
+  const code = typeof value === "string" ? value.trim().toLowerCase() : "";
+  return (YANDEX_MODES as readonly string[]).includes(code) ? (code as YandexMode) : YANDEX_DEFAULT_MODE;
+}
 /** Первый опрос операции: по замерам Яндекс обычно готов уже через доли секунды. */
 export const YANDEX_POLL_INITIAL_DELAY_MS = 300;
 export const YANDEX_POLL_INTERVAL_MS = 500;
@@ -165,7 +186,7 @@ export interface YandexRequestOptions {
   period?: YandexPeriod;
 }
 
-/** Тело запроса WebSearch.SearchAsync (поля по справочнику API v2). */
+/** Тело запроса WebSearch.Search / WebSearch.SearchAsync (поля по справочнику API v2, у обоих методов одинаковые). */
 export function buildYandexRequestBody(options: YandexRequestOptions): Record<string, unknown> {
   const queryText = options.query.trim().slice(0, YANDEX_MAX_QUERY_LENGTH);
   const body: Record<string, unknown> = {
@@ -365,6 +386,8 @@ export interface YandexEngineOptions {
   pollInitialDelayMs?: number;
   pollIntervalMs?: number;
   period?: YandexPeriod;
+  /** Режим обращения к API; по умолчанию auto. */
+  mode?: YandexMode;
 }
 
 interface OperationPayload {
@@ -372,6 +395,11 @@ interface OperationPayload {
   done?: unknown;
   error?: unknown;
   response?: { rawData?: unknown };
+}
+
+/** Ответ синхронного WebSearch.Search: rawData сразу в корне. */
+interface SyncPayload {
+  rawData?: unknown;
 }
 
 function describeOperationError(error: unknown): string {
@@ -383,8 +411,24 @@ function describeOperationError(error: unknown): string {
   return String(error);
 }
 
+/** Разбирает base64-XML выдачи; код 15 («ничего не найдено») — пустой список, прочие ошибки — EngineError. */
+function rowsFromRawData(rawData: unknown, emptyMessage: string): SearchRow[] {
+  if (typeof rawData !== "string" || !rawData) {
+    throw new EngineError("yandex", emptyMessage);
+  }
+  const parsed = parseYandexXml(Buffer.from(rawData, "base64").toString("utf8"));
+  if (parsed.error) {
+    if (parsed.error.code === YANDEX_NO_RESULTS_ERROR_CODE) {
+      return [];
+    }
+    const code = parsed.error.code ? ` (код ${parsed.error.code})` : "";
+    throw new EngineError("yandex", `ошибка поиска${code}: ${parsed.error.message}`);
+  }
+  return parsed.rows;
+}
+
 /**
- * Выполняет поиск в отложенном режиме. Бросает EngineError при любом сбое;
+ * Выполняет поиск в режиме options.mode (по умолчанию auto). Бросает EngineError при любом сбое;
  * внешняя отмена пробрасывается как AbortError.
  */
 export async function searchYandex(params: EngineSearchParams, options: YandexEngineOptions): Promise<SearchRow[]> {
@@ -396,10 +440,13 @@ export async function searchYandex(params: EngineSearchParams, options: YandexEn
   }
 }
 
-async function runYandexSearch(params: EngineSearchParams, options: YandexEngineOptions, signal: AbortSignal): Promise<SearchRow[]> {
-  const fetchImpl = options.fetchImpl ?? fetch;
-  const logger = options.logger ?? silentLogger;
-  const failure = (err: unknown) => toEngineError("yandex", err, { externalSignal: params.signal, timeoutMs: params.timeoutMs });
+interface PreparedRequest {
+  body: string;
+  headers: Record<string, string>;
+  authHeader: Record<string, string>;
+}
+
+function prepareRequest(params: EngineSearchParams, options: YandexEngineOptions): PreparedRequest {
   const searchType = resolveYandexSearchType(params.country);
   const body = buildYandexRequestBody({
     query: params.query,
@@ -410,13 +457,74 @@ async function runYandexSearch(params: EngineSearchParams, options: YandexEngine
     period: options.period,
   });
   const authHeader = { Authorization: `Api-Key ${options.apiKey}` };
+  return { body: JSON.stringify(body), authHeader, headers: { ...authHeader, "Content-Type": "application/json" } };
+}
+
+async function runYandexSearch(params: EngineSearchParams, options: YandexEngineOptions, signal: AbortSignal): Promise<SearchRow[]> {
+  const mode = options.mode ?? YANDEX_DEFAULT_MODE;
+  const request = prepareRequest(params, options);
+  if (mode === "sync") {
+    return runSyncSearch(params, options, request, signal);
+  }
+  try {
+    return await runAsyncSearch(params, options, request, signal);
+  } catch (err) {
+    const status = err instanceof EngineError ? err.status : undefined;
+    if (mode !== "auto" || status === undefined || !YANDEX_SYNC_FALLBACK_STATUSES.has(status) || signal.aborted) {
+      throw err;
+    }
+    const logger = options.logger ?? silentLogger;
+    logger.warn(`[yandex] searchAsync отвергнут (HTTP ${status}), повтор синхронным /v2/web/search | запрос: «${truncate(params.query, 80)}»`);
+    return runSyncSearch(params, options, request, signal);
+  }
+}
+
+/** Синхронный WebSearch.Search: один POST, rawData в ответе. */
+async function runSyncSearch(
+  params: EngineSearchParams,
+  options: YandexEngineOptions,
+  request: PreparedRequest,
+  signal: AbortSignal,
+): Promise<SearchRow[]> {
+  const fetchImpl = options.fetchImpl ?? fetch;
+  const failure = (err: unknown) => toEngineError("yandex", err, { externalSignal: params.signal, timeoutMs: params.timeoutMs });
+  try {
+    const response = await fetchImpl(YANDEX_SEARCH_SYNC_URL, {
+      method: "POST",
+      headers: request.headers,
+      body: request.body,
+      signal,
+    });
+    if (!response.ok) {
+      throw new EngineError("yandex", `HTTP ${response.status} при синхронном поиске: ${await readResponseText(response)}`, {
+        status: response.status,
+      });
+    }
+    const payload = (await response.json()) as SyncPayload;
+    return rowsFromRawData(payload.rawData, "синхронный ответ без rawData");
+  } catch (err) {
+    throw failure(err);
+  }
+}
+
+/** Отложенный WebSearch.SearchAsync: запуск операции и опрос до done=true. */
+async function runAsyncSearch(
+  params: EngineSearchParams,
+  options: YandexEngineOptions,
+  request: PreparedRequest,
+  signal: AbortSignal,
+): Promise<SearchRow[]> {
+  const fetchImpl = options.fetchImpl ?? fetch;
+  const logger = options.logger ?? silentLogger;
+  const failure = (err: unknown) => toEngineError("yandex", err, { externalSignal: params.signal, timeoutMs: params.timeoutMs });
+  const authHeader = request.authHeader;
 
   let operationId: string;
   try {
     const response = await fetchImpl(YANDEX_SEARCH_ASYNC_URL, {
       method: "POST",
-      headers: { ...authHeader, "Content-Type": "application/json" },
-      body: JSON.stringify(body),
+      headers: request.headers,
+      body: request.body,
       signal,
     });
     if (!response.ok) {
@@ -475,18 +583,6 @@ async function runYandexSearch(params: EngineSearchParams, options: YandexEngine
     if (!payload.done) {
       continue;
     }
-    const rawData = payload.response?.rawData;
-    if (typeof rawData !== "string" || !rawData) {
-      throw new EngineError("yandex", "операция завершена, но rawData пуст");
-    }
-    const parsed = parseYandexXml(Buffer.from(rawData, "base64").toString("utf8"));
-    if (parsed.error) {
-      if (parsed.error.code === YANDEX_NO_RESULTS_ERROR_CODE) {
-        return [];
-      }
-      const code = parsed.error.code ? ` (код ${parsed.error.code})` : "";
-      throw new EngineError("yandex", `ошибка поиска${code}: ${parsed.error.message}`);
-    }
-    return parsed.rows;
+    return rowsFromRawData(payload.response?.rawData, "операция завершена, но rawData пуст");
   }
 }

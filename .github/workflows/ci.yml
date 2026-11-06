@@ -3,6 +3,7 @@ name: Проверки
 on:
   push:
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -10,13 +11,29 @@ permissions:
 jobs:
   node:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - node: 22
+            sdk: none
+          - node: '26.13.0'
+            sdk: '2026.11.1'
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: ${{ matrix.node }}
           cache: npm
       - run: npm ci --omit=peer
+      - if: matrix.sdk != 'none'
+        # npm can skip a --no-save install that is already an optional peer.
+        # Install the host separately so this job always uses the real SDK.
+        run: |
+          npm install --prefix "$RUNNER_TEMP/openclaw-sdk" --ignore-scripts --no-audit --no-fund openclaw@${{ matrix.sdk }}
+          ln -s "$RUNNER_TEMP/openclaw-sdk/node_modules/openclaw" node_modules/openclaw
       - run: npm run typecheck
       - run: npm test
+        env:
+          REQUIRE_OPENCLAW_SDK: ${{ matrix.sdk != 'none' && '1' || '' }}
       - run: npm run build

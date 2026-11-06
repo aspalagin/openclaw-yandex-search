@@ -4,6 +4,7 @@ import {
   buildYandexRequestBody,
   parseYandexXml,
   resolveYandexLocalization,
+  resolveYandexMode,
   resolveYandexPeriod,
   resolveYandexSearchType,
   searchYandex,
@@ -11,6 +12,7 @@ import {
 import {
   YANDEX_ASYNC,
   YANDEX_OPS,
+  YANDEX_SYNC,
   collectLogger,
   createFakeFetch,
   fastYandex,
@@ -18,7 +20,10 @@ import {
   jsonResponse,
   textResponse,
   yandexOperation,
+  yandexSyncResponse,
 } from "./helpers.mjs";
+
+const RATE_LIMITED = '{"code":8,"message":"search rate limit exceeded, retry later"}';
 
 const baseParams = { query: "МТС новости сентябрь 2026", count: 10, timeoutMs: 5000 };
 const creds = { apiKey: "test-key", folderId: "folder-1" };
@@ -173,6 +178,100 @@ test("searchYandex: сетевые сбои опроса повторяются,
   await assert.rejects(
     searchYandex(baseParams, { ...creds, ...fastYandex, fetchImpl: forbidden.fetchImpl }),
     (err) => err.name === "EngineError" && err.status === 403,
+  );
+});
+
+test("resolveYandexMode: известные значения, регистр, мусор → auto", () => {
+  assert.equal(resolveYandexMode(undefined), "auto");
+  assert.equal(resolveYandexMode("sync"), "sync");
+  assert.equal(resolveYandexMode(" Async "), "async");
+  assert.equal(resolveYandexMode("turbo"), "auto");
+  assert.equal(resolveYandexMode(42), "auto");
+});
+
+test("searchYandex auto: HTTP 429 на запуске searchAsync → синхронный /v2/web/search с тем же телом", async () => {
+  const xml = fixture("yandex-ok.xml");
+  const { logger, lines } = collectLogger();
+  const { fetchImpl, calls } = createFakeFetch([
+    { match: YANDEX_ASYNC, handle: () => textResponse(RATE_LIMITED, { status: 429 }) },
+    { match: YANDEX_SYNC, handle: () => jsonResponse(yandexSyncResponse(xml)) },
+  ]);
+  const rows = await searchYandex({ ...baseParams, country: "US", language: "en" }, { ...creds, ...fastYandex, fetchImpl, logger, period: "PERIOD_DAY" });
+  assert.equal(rows.length, 2);
+  assert.deepEqual(
+    calls.map((call) => call.url),
+    [YANDEX_ASYNC, YANDEX_SYNC],
+  );
+  assert.equal(calls[1].init.method, "POST");
+  assert.equal(calls[1].init.body, calls[0].init.body);
+  assert.equal(calls[1].init.headers.Authorization, "Api-Key test-key");
+  const body = JSON.parse(calls[1].init.body);
+  assert.equal(body.query.searchType, "SEARCH_TYPE_COM");
+  assert.equal(body.period, "PERIOD_DAY");
+  assert.equal(lines.warn.length, 1);
+  assert.match(lines.warn[0], /HTTP 429.*синхронным/);
+});
+
+test("searchYandex auto: 501 тоже уходит в sync; 401 и ошибки опроса — нет", async () => {
+  const xml = fixture("yandex-ok.xml");
+  const unknownService = createFakeFetch([
+    { match: YANDEX_ASYNC, handle: () => textResponse('{"code":12,"message":"unknown service"}', { status: 501 }) },
+    { match: YANDEX_SYNC, handle: () => jsonResponse(yandexSyncResponse(xml)) },
+  ]);
+  assert.equal((await searchYandex(baseParams, { ...creds, ...fastYandex, fetchImpl: unknownService.fetchImpl })).length, 2);
+
+  const unauthorized = createFakeFetch([
+    { match: YANDEX_ASYNC, handle: () => textResponse('{"message":"unauthenticated"}', { status: 401 }) },
+    { match: YANDEX_SYNC, handle: () => jsonResponse(yandexSyncResponse(xml)) },
+  ]);
+  await assert.rejects(
+    searchYandex(baseParams, { ...creds, ...fastYandex, fetchImpl: unauthorized.fetchImpl }),
+    (err) => err.name === "EngineError" && err.status === 401,
+  );
+  assert.equal(unauthorized.calls.length, 1);
+
+  // 429 при опросе операции — не повод переключаться: опрос продолжается до результата.
+  const pollLimited = createFakeFetch([
+    { match: YANDEX_ASYNC, handle: () => jsonResponse({ id: "op-7" }) },
+    { match: YANDEX_OPS, handle: (_u, _i, call) => (call === 1 ? textResponse(RATE_LIMITED, { status: 429 }) : jsonResponse(yandexOperation(xml))) },
+    { match: YANDEX_SYNC, handle: () => { throw new Error("sync не должен вызываться"); } },
+  ]);
+  assert.equal((await searchYandex(baseParams, { ...creds, ...fastYandex, fetchImpl: pollLimited.fetchImpl })).length, 2);
+});
+
+test("searchYandex: mode=async без фолбэка, mode=sync без searchAsync, ошибки sync → EngineError", async () => {
+  const xml = fixture("yandex-ok.xml");
+  const asyncOnly = createFakeFetch([
+    { match: YANDEX_ASYNC, handle: () => textResponse(RATE_LIMITED, { status: 429 }) },
+    { match: YANDEX_SYNC, handle: () => jsonResponse(yandexSyncResponse(xml)) },
+  ]);
+  await assert.rejects(
+    searchYandex(baseParams, { ...creds, ...fastYandex, fetchImpl: asyncOnly.fetchImpl, mode: "async" }),
+    (err) => err.name === "EngineError" && err.status === 429,
+  );
+  assert.equal(asyncOnly.calls.length, 1);
+
+  const syncOnly = createFakeFetch([
+    { match: YANDEX_ASYNC, handle: () => { throw new Error("searchAsync не должен вызываться"); } },
+    { match: YANDEX_SYNC, handle: () => jsonResponse(yandexSyncResponse(xml)) },
+  ]);
+  const rows = await searchYandex(baseParams, { ...creds, ...fastYandex, fetchImpl: syncOnly.fetchImpl, mode: "sync" });
+  assert.equal(rows.length, 2);
+  assert.deepEqual(syncOnly.calls.map((call) => call.url), [YANDEX_SYNC]);
+
+  const syncEmpty = createFakeFetch([{ match: YANDEX_SYNC, handle: () => jsonResponse(yandexSyncResponse(fixture("yandex-error-15.xml"))) }]);
+  assert.deepEqual(await searchYandex(baseParams, { ...creds, fetchImpl: syncEmpty.fetchImpl, mode: "sync" }), []);
+
+  const syncLimited = createFakeFetch([{ match: YANDEX_SYNC, handle: () => textResponse(RATE_LIMITED, { status: 429 }) }]);
+  await assert.rejects(
+    searchYandex(baseParams, { ...creds, fetchImpl: syncLimited.fetchImpl, mode: "sync" }),
+    (err) => err.name === "EngineError" && err.status === 429 && /синхронном/.test(err.message),
+  );
+
+  const syncNoData = createFakeFetch([{ match: YANDEX_SYNC, handle: () => jsonResponse({}) }]);
+  await assert.rejects(
+    searchYandex(baseParams, { ...creds, fetchImpl: syncNoData.fetchImpl, mode: "sync" }),
+    (err) => err.name === "EngineError" && /rawData/.test(err.message),
   );
 });
 

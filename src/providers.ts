@@ -7,12 +7,12 @@
  * Всё остальное ядро отбрасывает, поэтому пометки источника здесь нет.
  */
 
-import { PLUGIN_ID, pluginEntryConfig, pluginMaxResults, resolveCredentials } from "./env.js";
+import { PLUGIN_ID, pluginEntryConfig, pluginMaxResults, pluginYandexMode, resolveCredentials } from "./env.js";
 import { runMultiSearch } from "./multi.js";
 import { loadWebSearchSdk, localWebSearchSdk, type WebSearchFilterError, type WebSearchSdk } from "./sdk.js";
 import type { EngineSearchParams, FetchLike, PluginLogger } from "./types.js";
 import { abortReason, errorMessage, silentLogger, truncate } from "./util.js";
-import { resolveYandexPeriod, searchYandex } from "./yandex.js";
+import { resolveYandexMode, resolveYandexPeriod, searchYandex } from "./yandex.js";
 
 /** Сколько строк отдаём модели по умолчанию (ядро всё равно режет до 10). */
 export const DEFAULT_RETURN_COUNT = 10;
@@ -282,6 +282,7 @@ export function createMultiSearchProviderPlugin(deps: ProviderDeps = {}): WebSea
           credentials,
           logger,
           fetchImpl: deps.fetchImpl,
+          yandex: { mode: resolveYandexMode(pluginYandexMode(ctx.config, deps.pluginConfig)) },
           now: deps.now?.(),
         });
         if (!outcome.ok) {
@@ -310,7 +311,7 @@ export function createYandexSearchProviderPlugin(deps: ProviderDeps = {}): WebSe
   return {
     id: "yandex",
     label: "Yandex Search",
-    hint: "Поиск через Yandex Search API v2 (отложенный режим): российские и мировые результаты.",
+    hint: "Поиск через Yandex Search API v2 (отложенный режим, при отказе 429/501 — синхронный): российские и мировые результаты.",
     requiresCredential: true,
     credentialLabel: "Yandex Cloud API Key",
     // См. комментарий у multi: YC_API_KEY_FILE плагин читает сам, ядру его показывать нельзя.
@@ -378,6 +379,7 @@ export function createYandexSearchProviderPlugin(deps: ProviderDeps = {}): WebSe
               fetchImpl: deps.fetchImpl,
               logger,
               period: period.period,
+              mode: resolveYandexMode(pluginYandexMode(ctx.config, deps.pluginConfig)),
             })
           ).slice(0, parsed.count);
           const payload = { results: rows, count: rows.length, tookMs: Date.now() - startedAt };
