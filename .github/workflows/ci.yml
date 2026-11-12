@@ -19,6 +19,8 @@ jobs:
             sdk: none
           - node: '26.13.0'
             sdk: '2026.11.1'
+          - node: '26.13.0'
+            sdk: '2026.11.3'
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
