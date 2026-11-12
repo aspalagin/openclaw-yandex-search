@@ -15,6 +15,7 @@ merges the results and removes duplicates, and keeps answering if one engine fai
   синхронный `/v2/web/search`, см. `yandex.mode`).
 
 Версия 0.2.3 написана под контракт web_search ядра OpenClaw 2026.9.x (проверена на 2026.9.6 и 2026.9.7).
+CI также проверяет настоящий SDK OpenClaw 2026.11.1 и 2026.11.3 на Node.js 26 и запасную реализацию без SDK на Node.js 22.
 История изменений — в [CHANGELOG.md](CHANGELOG.md).
 
 ## Как работает `multi`
